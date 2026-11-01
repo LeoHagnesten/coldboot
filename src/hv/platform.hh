@@ -21,6 +21,7 @@ namespace hv {
 		decltype ( &WHvCancelRunVirtualProcessor ) cancel_processor = nullptr;
 		decltype ( &WHvGetVirtualProcessorRegisters ) get_registers = nullptr;
 		decltype ( &WHvSetVirtualProcessorRegisters ) set_registers = nullptr;
+		decltype ( &WHvRequestInterrupt ) request_interrupt = nullptr;
 
 	};
 
@@ -40,9 +41,13 @@ namespace hv {
 
 		~partition ( );
 
-		bool create ( uint32_t processor_count, uint64_t memory_bytes );
+		bool create ( uint32_t processor_count, uint64_t memory_bytes, bool apic = true );
 
 		void destroy ( );
+
+		bool cancel ( uint32_t processor );
+
+		bool request ( const WHV_INTERRUPT_CONTROL& control );
 
 		bool registers ( uint32_t processor, const WHV_REGISTER_NAME* names, uint32_t count, WHV_REGISTER_VALUE* values ) const;
 

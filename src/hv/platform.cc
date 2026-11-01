@@ -34,7 +34,8 @@ namespace hv {
 			&& bind ( module, "WHvRunVirtualProcessor", table.run_processor )
 			&& bind ( module, "WHvCancelRunVirtualProcessor", table.cancel_processor )
 			&& bind ( module, "WHvGetVirtualProcessorRegisters", table.get_registers )
-			&& bind ( module, "WHvSetVirtualProcessorRegisters", table.set_registers );
+			&& bind ( module, "WHvSetVirtualProcessorRegisters", table.set_registers )
+			&& bind ( module, "WHvRequestInterrupt", table.request_interrupt );
 
 		state = bound ? 1 : -1;
 
@@ -89,7 +90,7 @@ namespace hv {
 
 	}
 
-	bool partition::create ( uint32_t processor_count, uint64_t memory_bytes ) {
+	bool partition::create ( uint32_t processor_count, uint64_t memory_bytes, bool apic ) {
 
 		destroy ( );
 		problem [ 0 ] = 0;
@@ -114,6 +115,18 @@ namespace hv {
 
 		property.ProcessorCount = processor_count;
 		result = api->set_property ( handle, WHvPartitionPropertyCodeProcessorCount, &property, sizeof ( property ) );
+
+		if ( SUCCEEDED ( result ) && apic ) {
+
+			WHV_PARTITION_PROPERTY mode = { };
+
+			mode.LocalApicEmulationMode = WHvX64LocalApicEmulationModeXApic;
+			result = api->set_property ( handle, WHvPartitionPropertyCodeLocalApicEmulationMode, &mode, sizeof ( mode ) );
+
+			if ( FAILED ( result ) )
+				return fail ( "This PC's hypervisor can't emulate the local APIC", result );
+
+		}
 
 		if ( SUCCEEDED ( result ) )
 			result = api->setup_partition ( handle );
@@ -194,6 +207,18 @@ namespace hv {
 	bool partition::run ( uint32_t processor, WHV_RUN_VP_EXIT_CONTEXT& exit ) {
 
 		return handle && processor < processors && SUCCEEDED ( platform ( )->run_processor ( handle, processor, &exit, sizeof ( exit ) ) );
+
+	}
+
+	bool partition::cancel ( uint32_t processor ) {
+
+		return handle && processor < processors && SUCCEEDED ( platform ( )->cancel_processor ( handle, processor, 0 ) );
+
+	}
+
+	bool partition::request ( const WHV_INTERRUPT_CONTROL& control ) {
+
+		return handle && SUCCEEDED ( platform ( )->request_interrupt ( handle, &control, sizeof ( control ) ) );
 
 	}
 

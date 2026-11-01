@@ -264,6 +264,7 @@ namespace tests {
 		storage_tests ( );
 		assembler_tests ( );
 		bios_tests ( );
+		emulator_tests ( );
 		hypervisor_tests ( );
 		print ( failure_count ( ) ? "\r\nSome tests failed.\r\n" : "\r\nAll tests passed.\r\n" );
 

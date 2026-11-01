@@ -26,6 +26,8 @@ namespace tests {
 
 	void bios_tests ( );
 
+	void emulator_tests ( );
+
 	void hypervisor_tests ( );
 
 	int32_t foundation_tests ( );
