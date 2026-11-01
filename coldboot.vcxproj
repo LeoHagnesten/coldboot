@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>17.0</VCProjectVersion>
+    <Keyword>Win32Proj</Keyword>
+    <ProjectGuid>{251D1243-2C27-4EA8-9910-E59038AC484E}</ProjectGuid>
+    <RootNamespace>coldboot</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>ClangCL</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="PropertySheets">
+    <Import Project="props\coldboot.props" />
+  </ImportGroup>
+  <PropertyGroup>
+    <TargetName>Coldboot</TargetName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ClCompile Include="src\app\audio.cc" />
+    <ClCompile Include="src\app\keys.cc" />
+    <ClCompile Include="src\app\main.cc" />
+    <ClCompile Include="src\app\session.cc" />
+    <ClCompile Include="src\app\settings.cc" />
+    <ClCompile Include="src\base\base.cc" />
+    <ClCompile Include="src\base\files.cc" />
+    <ClCompile Include="src\base\inflate.cc" />
+    <ClCompile Include="src\base\math.cc" />
+    <ClCompile Include="src\base\png.cc" />
+    <ClCompile Include="src\bus\bus.cc" />
+    <ClCompile Include="src\chipset\dma.cc" />
+    <ClCompile Include="src\chipset\pic.cc" />
+    <ClCompile Include="src\chipset\pit.cc" />
+    <ClCompile Include="src\chipset\ppi.cc" />
+    <ClCompile Include="src\cpu\cpu.cc" />
+    <ClCompile Include="src\cpu\execute.cc" />
+    <ClCompile Include="src\input\keyboard.cc" />
+    <ClCompile Include="src\machine\xt.cc" />
+    <ClCompile Include="src\runtime\common.cc" />
+    <ClCompile Include="src\runtime\memory.cc" />
+    <ClCompile Include="src\runtime\rounding.cc" />
+    <ClCompile Include="src\runtime\startup.cc" />
+    <ClCompile Include="src\storage\fdc.cc" />
+    <ClCompile Include="src\storage\floppy.cc" />
+    <ClCompile Include="src\tests\capture.cc" />
+    <ClCompile Include="src\tests\devices.cc" />
+    <ClCompile Include="src\tests\entry.cc" />
+    <ClCompile Include="src\tests\foundation.cc" />
+    <ClCompile Include="src\tests\harness.cc" />
+    <ClCompile Include="src\tests\single_step.cc" />
+    <ClCompile Include="src\tests\storage.cc" />
+    <ClCompile Include="src\video\cga.cc" />
+    <ClCompile Include="src\video\font.cc" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\app\audio.hh" />
+    <ClInclude Include="src\app\keys.hh" />
+    <ClInclude Include="src\app\session.hh" />
+    <ClInclude Include="src\app\settings.hh" />
+    <ClInclude Include="src\base\base.hh" />
+    <ClInclude Include="src\base\files.hh" />
+    <ClInclude Include="src\base\inflate.hh" />
+    <ClInclude Include="src\base\math.hh" />
+    <ClInclude Include="src\base\png.hh" />
+    <ClInclude Include="src\bus\bus.hh" />
+    <ClInclude Include="src\chipset\dma.hh" />
+    <ClInclude Include="src\chipset\pic.hh" />
+    <ClInclude Include="src\chipset\pit.hh" />
+    <ClInclude Include="src\chipset\ppi.hh" />
+    <ClInclude Include="src\cpu\cpu.hh" />
+    <ClInclude Include="src\cpu\registers.hh" />
+    <ClInclude Include="src\input\keyboard.hh" />
+    <ClInclude Include="src\machine\xt.hh" />
+    <ClInclude Include="src\runtime\runtime.hh" />
+    <ClInclude Include="src\storage\fdc.hh" />
+    <ClInclude Include="src\storage\floppy.hh" />
+    <ClInclude Include="src\tests\harness.hh" />
+    <ClInclude Include="src\tests\program.hh" />
+    <ClInclude Include="src\video\cga.hh" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="assets\coldboot.manifest" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="assets\coldboot.rc" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>
