@@ -34,6 +34,9 @@
     <Filter Include="src\machine">
       <UniqueIdentifier>{FB5B6353-8465-5649-9770-C1EBFE1315CA}</UniqueIdentifier>
     </Filter>
+    <Filter Include="src\pc">
+      <UniqueIdentifier>{8A4D2E61-7C3B-5F09-B1E8-2D6C9F4A7E35}</UniqueIdentifier>
+    </Filter>
     <Filter Include="src\render">
       <UniqueIdentifier>{6D2B91E4-0F37-5C8A-A41E-73B5C9D2E816}</UniqueIdentifier>
     </Filter>
@@ -70,6 +73,7 @@
     <ClCompile Include="src\hv\*.cc"><Filter>src\hv</Filter></ClCompile>
     <ClCompile Include="src\input\*.cc"><Filter>src\input</Filter></ClCompile>
     <ClCompile Include="src\machine\*.cc"><Filter>src\machine</Filter></ClCompile>
+    <ClCompile Include="src\pc\*.cc"><Filter>src\pc</Filter></ClCompile>
     <ClCompile Include="src\render\*.cc"><Filter>src\render</Filter></ClCompile>
     <ClCompile Include="src\runtime\*.cc"><Filter>src\runtime</Filter></ClCompile>
     <ClCompile Include="src\storage\*.cc"><Filter>src\storage</Filter></ClCompile>
@@ -88,6 +92,7 @@
     <ClInclude Include="src\hv\*.hh"><Filter>src\hv</Filter></ClInclude>
     <ClInclude Include="src\input\*.hh"><Filter>src\input</Filter></ClInclude>
     <ClInclude Include="src\machine\*.hh"><Filter>src\machine</Filter></ClInclude>
+    <ClInclude Include="src\pc\*.hh"><Filter>src\pc</Filter></ClInclude>
     <ClInclude Include="src\render\*.hh"><Filter>src\render</Filter></ClInclude>
     <ClInclude Include="src\runtime\*.hh"><Filter>src\runtime</Filter></ClInclude>
     <ClInclude Include="src\storage\*.hh"><Filter>src\storage</Filter></ClInclude>

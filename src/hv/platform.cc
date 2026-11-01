@@ -90,7 +90,7 @@ namespace hv {
 
 	}
 
-	bool partition::create ( uint32_t processor_count, uint64_t memory_bytes, bool apic ) {
+	bool partition::create ( uint32_t processor_count, uint64_t memory_bytes, uint32_t features ) {
 
 		destroy ( );
 		problem [ 0 ] = 0;
@@ -116,7 +116,7 @@ namespace hv {
 		property.ProcessorCount = processor_count;
 		result = api->set_property ( handle, WHvPartitionPropertyCodeProcessorCount, &property, sizeof ( property ) );
 
-		if ( SUCCEEDED ( result ) && apic ) {
+		if ( SUCCEEDED ( result ) && ( features & PARTITION_APIC ) ) {
 
 			WHV_PARTITION_PROPERTY mode = { };
 
@@ -125,6 +125,28 @@ namespace hv {
 
 			if ( FAILED ( result ) )
 				return fail ( "This PC's hypervisor can't emulate the local APIC", result );
+
+		}
+
+		if ( SUCCEEDED ( result ) && ( features & PARTITION_EXITS ) ) {
+
+			static const UINT32 leaves [ ] = { 0x00000001, 0x40000000, 0x40000001, 0x40000002, 0x40000003, 0x40000004, 0x40000005, 0x40000006 };
+			WHV_PARTITION_PROPERTY exits = { };
+			WHV_PARTITION_PROPERTY msrs = { };
+
+			exits.ExtendedVmExits.X64CpuidExit = 1;
+			exits.ExtendedVmExits.X64MsrExit = 1;
+			msrs.X64MsrExitBitmap.UnhandledMsrs = 1;
+			result = api->set_property ( handle, WHvPartitionPropertyCodeExtendedVmExits, &exits, sizeof ( exits ) );
+
+			if ( SUCCEEDED ( result ) )
+				result = api->set_property ( handle, WHvPartitionPropertyCodeCpuidExitList, leaves, sizeof ( leaves ) );
+
+			if ( SUCCEEDED ( result ) )
+				result = api->set_property ( handle, WHvPartitionPropertyCodeX64MsrExitBitmap, &msrs, sizeof ( msrs ) );
+
+			if ( FAILED ( result ) )
+				return fail ( "This PC's hypervisor can't hand CPUID and MSR accesses to Coldboot", result );
 
 		}
 

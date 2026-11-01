@@ -2,6 +2,7 @@
 
 #include "assembler/assembler.hh"
 #include "hv/machine.hh"
+#include "pc/ioapic.hh"
 #include "tests/harness.hh"
 
 namespace tests {
@@ -72,6 +73,76 @@ namespace tests {
 	};
 
 	static const uint8_t started_program [ ] = { 0xB0, 0xA1, 0xE6, 0xE9, 0xF4 };
+
+	static const uint8_t identity_program [ ] = {
+
+		0xB8, 0x00, 0x00, 0x00, 0x40,
+		0x0F, 0xA2,
+		0x89, 0x1D, 0x00, 0x30, 0x00, 0x00,
+		0x89, 0x0D, 0x04, 0x30, 0x00, 0x00,
+		0x89, 0x15, 0x08, 0x30, 0x00, 0x00,
+		0xB8, 0x01, 0x00, 0x00, 0x00,
+		0x0F, 0xA2,
+		0x89, 0x0D, 0x0C, 0x30, 0x00, 0x00,
+		0xB9, 0xFF, 0x02, 0x00, 0x00,
+		0xB8, 0x06, 0x08, 0x00, 0x00,
+		0x31, 0xD2,
+		0x0F, 0x30,
+		0x31, 0xC0,
+		0x0F, 0x32,
+		0xA3, 0x10, 0x30, 0x00, 0x00,
+		0xB9, 0x34, 0x12, 0x00, 0x00,
+		0x0F, 0x32,
+		0xB0, 0xFF, 0xE6, 0xE9,
+		0xF4,
+
+	};
+
+	static const uint8_t protection_handler [ ] = { 0x83, 0xC4, 0x04, 0x83, 0x04, 0x24, 0x02, 0xB0, 0x0D, 0xE6, 0xE9, 0xCF };
+
+	static const uint8_t router_program [ ] = {
+
+		0xC7, 0x05, 0xF0, 0x00, 0xE0, 0xFE, 0xFF, 0x01, 0x00, 0x00,
+		0xC7, 0x05, 0x00, 0x00, 0xC0, 0xFE, 0x1A, 0x00, 0x00, 0x00,
+		0xC7, 0x05, 0x10, 0x00, 0xC0, 0xFE, 0x45, 0x00, 0x00, 0x00,
+		0xC7, 0x05, 0x00, 0x00, 0xC0, 0xFE, 0x1B, 0x00, 0x00, 0x00,
+		0xC7, 0x05, 0x10, 0x00, 0xC0, 0xFE, 0x00, 0x00, 0x00, 0x00,
+		0xC7, 0x05, 0x00, 0x00, 0xC0, 0xFE, 0x1C, 0x00, 0x00, 0x00,
+		0xC7, 0x05, 0x10, 0x00, 0xC0, 0xFE, 0x46, 0x80, 0x00, 0x00,
+		0xC7, 0x05, 0x00, 0x00, 0xC0, 0xFE, 0x1D, 0x00, 0x00, 0x00,
+		0xC7, 0x05, 0x10, 0x00, 0xC0, 0xFE, 0x00, 0x00, 0x00, 0x00,
+		0xB0, 0x01, 0xE6, 0xE9,
+		0xFB,
+		0xF4,
+		0xEB, 0xFD,
+
+	};
+
+	static const uint8_t edge_handler [ ] = { 0xB0, 0x45, 0xE6, 0xE9, 0xC7, 0x05, 0xB0, 0x00, 0xE0, 0xFE, 0x00, 0x00, 0x00, 0x00, 0xCF };
+
+	static const uint8_t level_handler [ ] = { 0xB0, 0x46, 0xE6, 0xE9, 0xB0, 0x00, 0xE6, 0xF0, 0xC7, 0x05, 0xB0, 0x00, 0xE0, 0xFE, 0x00, 0x00, 0x00, 0x00, 0xCF };
+
+	static const uint8_t window_program [ ] = {
+
+		0xC7, 0x05, 0xF0, 0x00, 0xE0, 0xFE, 0xFF, 0x01, 0x00, 0x00,
+		0xC7, 0x05, 0x50, 0x03, 0xE0, 0xFE, 0x00, 0x07, 0x00, 0x00,
+		0xFA,
+		0xB0, 0x01, 0xE6, 0xE9,
+		0xB9, 0x00, 0x00, 0x00, 0x02,
+		0xE2, 0xFE,
+		0xB0, 0x02, 0xE6, 0xE9,
+		0xFB,
+		0xF4,
+		0xB0, 0x03, 0xE6, 0xE9,
+		0xF4,
+
+	};
+
+	static const uint8_t window_handler [ ] = { 0xB0, 0x30, 0xE6, 0xE9, 0xCF };
+
+	static const uint8_t counting_program [ ] = { 0xFF, 0x05, 0x00, 0x30, 0x00, 0x00, 0xEB, 0xF8 };
+
+	static const uint8_t crashing_program [ ] = { 0xCD, 0x30, 0xF4 };
 
 	struct port_log : hv::device {
 
@@ -193,14 +264,54 @@ namespace tests {
 
 	}
 
+	struct line_dropper : hv::device {
+
+		pc::ioapic* router = nullptr;
+
+		uint64_t read ( uint64_t, uint32_t ) override {
+
+			return 0xFF;
+
+		}
+
+		void write ( uint64_t, uint32_t, uint64_t ) override {
+
+			router->set_line ( 6, false );
+
+		}
+
+	};
+
+	static void descriptors ( hv::machine& vm ) {
+
+		place64 ( vm, 0x7008, 0x00CF9B000000FFFFull );
+		place64 ( vm, 0x7010, 0x00CF93000000FFFFull );
+
+	}
+
+	static void gate ( hv::machine& vm, uint32_t vector, uint32_t handler ) {
+
+		uint8_t entry [ 8 ] = { static_cast < uint8_t > ( handler ), static_cast < uint8_t > ( handler >> 8 ), 0x08, 0x00, 0x00, 0x8E, static_cast < uint8_t > ( handler >> 16 ), static_cast < uint8_t > ( handler >> 24 ) };
+
+		place ( vm, 0x5000 + vector * 8, entry, 8 );
+
+	}
+
+	static bool wait_count ( hv::machine& vm, const port_log& log, long wanted ) {
+
+		for ( uint32_t waited = 0; waited < 3000 && log.count < wanted && vm.running ( ); waited++ )
+			Sleep ( 1 );
+
+		return log.count >= wanted;
+
+	}
+
 	static bool settle ( hv::machine& vm, const port_log& log, long wanted ) {
 
-		for ( uint32_t waited = 0; waited < 3000 && log.count < wanted && !vm.problem [ 0 ]; waited += 5 )
-			Sleep ( 5 );
-
+		wait_count ( vm, log, wanted );
 		vm.stop ( );
 
-		if ( vm.problem [ 0 ] ) {
+		if ( vm.reason == hv::STOP_FAILED ) {
 
 			char line [ 260 ] = "        ";
 
@@ -218,7 +329,7 @@ namespace tests {
 
 		hv::partition* machine = new hv::partition ( );
 		assembler::result* program = new assembler::result ( );
-		bool created = machine->create ( 1, 2 * 1024 * 1024, false );
+		bool created = machine->create ( 1, 2 * 1024 * 1024, 0 );
 		bool assembled = assembler::assemble ( guest_program, base::text_length ( guest_program ), nullptr, 0, *program );
 
 		if ( !created ) {
@@ -423,6 +534,183 @@ namespace tests {
 
 	}
 
+	static void identity_tests ( ) {
+
+		hv::machine* vm = new hv::machine ( );
+		port_log* log = new port_log ( );
+		bool ready = vm->create ( 1, 2 * 1024 * 1024 );
+
+		if ( ready ) {
+
+			vm->attach_ports ( 0xE9, 0xE9, log );
+			descriptors ( *vm );
+			gate ( *vm, 13, 0x1100 );
+			place ( *vm, 0x1000, identity_program, sizeof ( identity_program ) );
+			place ( *vm, 0x1100, protection_handler, sizeof ( protection_handler ) );
+			ready = vm->set_state ( 0, flat_state ( false ) ) && vm->set_tables ( 0, 0x7000, 23, 0x5000, 0x7FF ) && vm->start ( );
+
+		}
+
+		bool finished = ready && settle ( *vm, *log, 2 );
+		bool named = finished && peek ( *vm, 0x3000, 4 ) == 0x646C6F43 && peek ( *vm, 0x3004, 4 ) == 0x746F6F62 && peek ( *vm, 0x3008, 4 ) == 0x20204D56;
+		uint64_t features = peek ( *vm, 0x300C, 4 );
+
+		expect ( named && ( features >> 31 & 1 ) && !( features >> 21 & 1 ), "hypervisor: CPUID names Coldboot as the hypervisor and hides x2APIC" );
+		expect ( finished && peek ( *vm, 0x3010, 4 ) == 0x806 && log->values [ 0 ] == 0x0D && log->values [ 1 ] == 0xFF && vm->msr_exits > 0, "hypervisor: MTRR writes read back and an unknown MSR raises #GP through Coldboot" );
+
+		delete vm;
+		delete log;
+
+	}
+
+	static void router_tests ( ) {
+
+		hv::machine* vm = new hv::machine ( );
+		port_log* log = new port_log ( );
+		pc::ioapic* router = new pc::ioapic ( *vm );
+		line_dropper* dropper = new line_dropper ( );
+		bool ready = vm->create ( 1, 2 * 1024 * 1024 );
+
+		dropper->router = router;
+
+		if ( ready ) {
+
+			vm->attach_ports ( 0xE9, 0xE9, log );
+			vm->attach_ports ( 0xF0, 0xF0, dropper );
+			vm->attach_memory ( pc::ioapic::base, pc::ioapic::window, router );
+			vm->listen_eoi ( router );
+			descriptors ( *vm );
+			gate ( *vm, 0x45, 0x1100 );
+			gate ( *vm, 0x46, 0x1200 );
+			place ( *vm, 0x1000, router_program, sizeof ( router_program ) );
+			place ( *vm, 0x1100, edge_handler, sizeof ( edge_handler ) );
+			place ( *vm, 0x1200, level_handler, sizeof ( level_handler ) );
+			ready = vm->set_state ( 0, flat_state ( false ) ) && vm->set_tables ( 0, 0x7000, 23, 0x5000, 0x7FF ) && vm->start ( );
+
+		}
+
+		bool edge = false;
+		bool level = false;
+		uint64_t entry = 0;
+
+		if ( ready && wait_count ( *vm, *log, 1 ) ) {
+
+			router->set_line ( 5, true );
+			edge = wait_count ( *vm, *log, 2 );
+			router->set_line ( 5, false );
+			router->set_line ( 6, true );
+			level = wait_count ( *vm, *log, 3 );
+			Sleep ( 50 );
+			entry = router->entry ( 6 );
+
+		}
+
+		bool finished = ready && settle ( *vm, *log, 3 );
+
+		expect ( finished && edge && log->values [ 0 ] == 0x01 && log->values [ 1 ] == 0x45, "hypervisor: the IOAPIC routes an edge-triggered line to its vector through the local APIC" );
+		expect ( finished && level && log->values [ 2 ] == 0x46 && log->count == 3 && !( entry >> 14 & 1 ), "hypervisor: a level-triggered line holds remote IRR until the guest's EOI clears it" );
+
+		delete vm;
+		delete log;
+		delete router;
+		delete dropper;
+
+	}
+
+	static void window_tests ( ) {
+
+		hv::machine* vm = new hv::machine ( );
+		port_log* log = new port_log ( );
+		bool ready = vm->create ( 1, 2 * 1024 * 1024 );
+
+		if ( ready ) {
+
+			vm->attach_ports ( 0xE9, 0xE9, log );
+			descriptors ( *vm );
+			gate ( *vm, 0x30, 0x1300 );
+			place ( *vm, 0x1000, window_program, sizeof ( window_program ) );
+			place ( *vm, 0x1300, window_handler, sizeof ( window_handler ) );
+			ready = vm->set_state ( 0, flat_state ( false ) ) && vm->set_tables ( 0, 0x7000, 23, 0x5000, 0x7FF ) && vm->start ( );
+
+		}
+
+		if ( ready && wait_count ( *vm, *log, 1 ) )
+			ready = vm->external ( 0, 0x30 );
+
+		bool finished = ready && settle ( *vm, *log, 4 );
+
+		expect ( finished && log->values [ 0 ] == 1 && log->values [ 1 ] == 2 && log->values [ 2 ] == 0x30 && log->values [ 3 ] == 3, "hypervisor: a PIC-style interrupt raised during cli waits for the interrupt window" );
+
+		delete vm;
+		delete log;
+
+	}
+
+	static void pause_tests ( ) {
+
+		hv::machine* vm = new hv::machine ( );
+		bool ready = vm->create ( 1, 2 * 1024 * 1024 );
+
+		if ( ready ) {
+
+			place ( *vm, 0x1000, counting_program, sizeof ( counting_program ) );
+			ready = vm->set_state ( 0, flat_state ( false ) ) && vm->start ( );
+
+		}
+
+		bool paused = false;
+		bool readable = false;
+		uint64_t before = 0;
+		uint64_t during = 0;
+		uint64_t after = 0;
+
+		if ( ready ) {
+
+			Sleep ( 30 );
+			paused = vm->pause ( );
+			before = peek ( *vm, 0x3000, 4 );
+			Sleep ( 30 );
+			during = peek ( *vm, 0x3000, 4 );
+
+			hv::cpu_state cpu;
+
+			readable = vm->get_state ( 0, cpu ) && cpu.rip >= 0x1000 && cpu.rip < 0x1008;
+			vm->resume ( );
+			Sleep ( 30 );
+			after = peek ( *vm, 0x3000, 4 );
+			vm->stop ( );
+
+		}
+
+		expect ( paused && readable && before > 0 && before == during && after > during, "hypervisor: pause freezes every processor so state can be read, and resume carries on" );
+
+		delete vm;
+
+	}
+
+	static void shutdown_tests ( ) {
+
+		hv::machine* vm = new hv::machine ( );
+		port_log* log = new port_log ( );
+		bool ready = vm->create ( 1, 2 * 1024 * 1024 );
+
+		if ( ready ) {
+
+			place ( *vm, 0x1000, crashing_program, sizeof ( crashing_program ) );
+			ready = vm->set_state ( 0, flat_state ( false ) ) && vm->set_tables ( 0, 0x7000, 23, 0x5000, 0 ) && vm->start ( );
+
+		}
+
+		if ( ready )
+			settle ( *vm, *log, 1 );
+
+		expect ( ready && vm->reason == hv::STOP_SHUTDOWN, "hypervisor: a triple fault stops the machine as a shutdown, ready for a reset" );
+
+		delete vm;
+		delete log;
+
+	}
+
 	void hypervisor_tests ( ) {
 
 		print ( "\r\n" );
@@ -440,6 +728,11 @@ namespace tests {
 		long_tests ( );
 		interrupt_tests ( );
 		processor_tests ( );
+		identity_tests ( );
+		router_tests ( );
+		window_tests ( );
+		pause_tests ( );
+		shutdown_tests ( );
 
 	}
 

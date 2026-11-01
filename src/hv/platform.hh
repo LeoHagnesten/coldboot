@@ -29,6 +29,13 @@ namespace hv {
 
 	bool present ( );
 
+	enum partition_feature : uint32_t {
+
+		PARTITION_APIC = 1,
+		PARTITION_EXITS = 2,
+
+	};
+
 	class partition {
 
 	public:
@@ -41,7 +48,7 @@ namespace hv {
 
 		~partition ( );
 
-		bool create ( uint32_t processor_count, uint64_t memory_bytes, bool apic = true );
+		bool create ( uint32_t processor_count, uint64_t memory_bytes, uint32_t features = PARTITION_APIC | PARTITION_EXITS );
 
 		void destroy ( );
 

@@ -64,7 +64,7 @@ Coldboot.exe --own [--a <image>] [--b <image>] <steps>
 Coldboot.exe --smoke <folder> [<image>]
 ```
 
-- `--test` runs 124 checks across the CPU, the chips, the floppy controller, the assembler, disk images, the BIOS, save states, the x86-64 instruction emulator and the hypervisor engine. The hypervisor checks are skipped on PCs without the Windows Hypervisor Platform.
+- `--test` runs 131 checks across the CPU, the chips, the floppy controller, the assembler, disk images, the BIOS, save states, the x86-64 instruction emulator and the hypervisor engine. The hypervisor checks are skipped on PCs without the Windows Hypervisor Platform.
 - `--cpu` runs SingleStepTests. It also takes `--only <prefix>`, `--exact` and `--timing`.
 - `--own` boots the built-in BIOS and works through the steps in order. `--a` and `--b` take `.asm` files too:
   - `--run <seconds>` runs emulated time

@@ -38,9 +38,58 @@ namespace hv {
 
 	}
 
+	static int32_t mtrr_slot ( uint32_t msr ) {
+
+		if ( msr >= 0x200 && msr <= 0x20F )
+			return static_cast < int32_t > ( msr - 0x200 );
+
+		if ( msr == 0x250 )
+			return 16;
+
+		if ( msr == 0x258 || msr == 0x259 )
+			return static_cast < int32_t > ( 17 + msr - 0x258 );
+
+		if ( msr >= 0x268 && msr <= 0x26F )
+			return static_cast < int32_t > ( 19 + msr - 0x268 );
+
+		return msr == 0x2FF ? 27 : -1;
+
+	}
+
+	static void shape_cpuid ( uint32_t leaf, uint32_t* result ) {
+
+		if ( leaf == 1 ) {
+
+			result [ 2 ] &= ~( ( 1u << 21 ) | ( 1u << 3 ) );
+			result [ 2 ] |= 1u << 31;
+
+		} else if ( leaf == 0x40000000 ) {
+
+			result [ 0 ] = 0x40000001;
+			result [ 1 ] = 0x646C6F43;
+			result [ 2 ] = 0x746F6F62;
+			result [ 3 ] = 0x20204D56;
+
+		} else if ( leaf > 0x40000000 && leaf <= 0x400000FF ) {
+
+			result [ 0 ] = 0;
+			result [ 1 ] = 0;
+			result [ 2 ] = 0;
+			result [ 3 ] = 0;
+
+		}
+
+	}
+
 	machine::~machine ( ) {
 
 		destroy ( );
+
+		if ( resume_event )
+			CloseHandle ( resume_event );
+
+		if ( parked_event )
+			CloseHandle ( parked_event );
 
 	}
 
@@ -52,6 +101,13 @@ namespace hv {
 
 		if ( processor_count > max_processors )
 			processor_count = max_processors;
+
+		for ( uint32_t i = 0; i < max_processors; i++ ) {
+
+			for ( uint64_t& value : mtrrs [ i ] )
+				value = 0;
+
+		}
 
 		if ( core.create ( processor_count, memory_bytes ) )
 			return true;
@@ -175,9 +231,24 @@ namespace hv {
 		if ( thread_count || !core.processors )
 			return false;
 
+		if ( !resume_event )
+			resume_event = CreateEventW ( nullptr, TRUE, TRUE, nullptr );
+
+		if ( !parked_event )
+			parked_event = CreateEventW ( nullptr, TRUE, FALSE, nullptr );
+
+		if ( !resume_event || !parked_event )
+			return false;
+
 		quit = 0;
 		failed = 0;
+		pausing = 0;
+		parked = 0;
 		reason = STOP_NONE;
+		SetEvent ( resume_event );
+
+		for ( uint32_t i = 0; i < max_processors; i++ )
+			pending [ i ] = 0;
 
 		for ( uint32_t i = 0; i < core.processors; i++ ) {
 
@@ -214,6 +285,8 @@ namespace hv {
 			return;
 
 		InterlockedExchange ( &quit, 1 );
+		InterlockedExchange ( &pausing, 0 );
+		SetEvent ( resume_event );
 
 		if ( reason == STOP_NONE )
 			reason = STOP_REQUESTED;
@@ -239,22 +312,83 @@ namespace hv {
 
 	}
 
-	bool machine::interrupt ( uint32_t destination, uint32_t vector ) {
+	bool machine::interrupt ( uint32_t destination, uint32_t vector, bool logical, bool level, uint32_t type ) {
 
 		WHV_INTERRUPT_CONTROL control = { };
 
-		control.Type = WHvX64InterruptTypeFixed;
-		control.DestinationMode = WHvX64InterruptDestinationModePhysical;
-		control.TriggerMode = WHvX64InterruptTriggerModeEdge;
+		control.Type = type;
+		control.DestinationMode = logical ? WHvX64InterruptDestinationModeLogical : WHvX64InterruptDestinationModePhysical;
+		control.TriggerMode = level ? WHvX64InterruptTriggerModeLevel : WHvX64InterruptTriggerModeEdge;
 		control.Destination = destination;
 		control.Vector = vector;
 
 		bool sent = core.request ( control );
 
-		if ( sent && destination < thread_count )
-			SetEvent ( threads [ destination ].wake );
+		for ( uint32_t i = 0; sent && i < thread_count; i++ ) {
+
+			if ( logical || i == destination || destination == 0xFF )
+				SetEvent ( threads [ i ].wake );
+
+		}
 
 		return sent;
+
+	}
+
+	bool machine::external ( uint32_t processor, uint32_t vector ) {
+
+		if ( processor >= core.processors )
+			return false;
+
+		InterlockedExchange ( &pending [ processor ], static_cast < long > ( 0x100 | ( vector & 0xFF ) ) );
+
+		if ( processor < thread_count ) {
+
+			core.cancel ( processor );
+			SetEvent ( threads [ processor ].wake );
+
+		}
+
+		return true;
+
+	}
+
+	bool machine::pause ( ) {
+
+		if ( !thread_count || quit )
+			return false;
+
+		ResetEvent ( parked_event );
+		ResetEvent ( resume_event );
+		InterlockedExchange ( &pausing, 1 );
+
+		for ( uint32_t waited = 0; waited < 2000; waited++ ) {
+
+			for ( uint32_t i = 0; i < thread_count; i++ ) {
+
+				core.cancel ( i );
+				SetEvent ( threads [ i ].wake );
+
+			}
+
+			if ( WaitForSingleObject ( parked_event, 1 ) == WAIT_OBJECT_0 )
+				return true;
+
+			if ( quit )
+				break;
+
+		}
+
+		resume ( );
+
+		return false;
+
+	}
+
+	void machine::resume ( ) {
+
+		InterlockedExchange ( &pausing, 0 );
+		SetEvent ( resume_event );
 
 	}
 
@@ -379,6 +513,21 @@ namespace hv {
 
 		while ( !quit ) {
 
+			if ( pausing ) {
+
+				if ( InterlockedIncrement ( &parked ) == static_cast < long > ( thread_count ) )
+					SetEvent ( parked_event );
+
+				WaitForSingleObject ( resume_event, INFINITE );
+				InterlockedDecrement ( &parked );
+
+				continue;
+
+			}
+
+			if ( pending [ index ] && !deliver_external ( index ) )
+				return;
+
 			WHV_RUN_VP_EXIT_CONTEXT exit = { };
 
 			if ( !core.run ( index, exit ) ) {
@@ -431,6 +580,73 @@ namespace hv {
 
 			case WHvRunVpExitReasonMemoryAccess:
 				return emulate_at ( index, exit.MemoryAccess.InstructionBytes, exit.MemoryAccess.InstructionByteCount );
+
+			case WHvRunVpExitReasonX64Cpuid: {
+
+				const WHV_X64_CPUID_ACCESS_CONTEXT& access = exit.CpuidAccess;
+				uint32_t result [ 4 ] = { static_cast < uint32_t > ( access.DefaultResultRax ), static_cast < uint32_t > ( access.DefaultResultRbx ), static_cast < uint32_t > ( access.DefaultResultRcx ), static_cast < uint32_t > ( access.DefaultResultRdx ) };
+				WHV_REGISTER_NAME names [ 4 ] = { WHvX64RegisterRax, WHvX64RegisterRbx, WHvX64RegisterRcx, WHvX64RegisterRdx };
+				WHV_REGISTER_VALUE values [ 4 ] = { };
+
+				shape_cpuid ( static_cast < uint32_t > ( access.Rax ), result );
+
+				for ( uint32_t i = 0; i < 4; i++ )
+					values [ i ].Reg64 = result [ i ];
+
+				if ( !core.set_registers ( index, names, 4, values ) )
+					return fail ( index, "couldn't write a CPUID result back", nullptr, 0 );
+
+				return core.skip ( index, exit ) || fail ( index, "couldn't step past CPUID", nullptr, 0 );
+
+			}
+
+			case WHvRunVpExitReasonX64MsrAccess: {
+
+				const WHV_X64_MSR_ACCESS_CONTEXT& access = exit.MsrAccess;
+
+				InterlockedIncrement ( &msr_exits );
+
+				if ( access.AccessInfo.IsWrite ) {
+
+					if ( !write_msr ( index, access.MsrNumber, ( access.Rdx << 32 ) | ( access.Rax & 0xFFFFFFFF ) ) )
+						return raise ( index, 13, 0 );
+
+				} else {
+
+					uint64_t value = 0;
+
+					if ( !read_msr ( index, access.MsrNumber, value ) )
+						return raise ( index, 13, 0 );
+
+					WHV_REGISTER_NAME names [ 2 ] = { WHvX64RegisterRax, WHvX64RegisterRdx };
+					WHV_REGISTER_VALUE values [ 2 ] = { };
+
+					values [ 0 ].Reg64 = value & 0xFFFFFFFF;
+					values [ 1 ].Reg64 = value >> 32;
+
+					if ( !core.set_registers ( index, names, 2, values ) )
+						return fail ( index, "couldn't write an MSR value back", nullptr, 0 );
+
+				}
+
+				return core.skip ( index, exit ) || fail ( index, "couldn't step past an MSR access", nullptr, 0 );
+
+			}
+
+			case WHvRunVpExitReasonX64ApicEoi:
+
+				if ( eoi_target ) {
+
+					AcquireSRWLockExclusive ( &device_lock );
+					eoi_target->eoi ( exit.ApicEoi.InterruptVector );
+					ReleaseSRWLockExclusive ( &device_lock );
+
+				}
+
+				return true;
+
+			case WHvRunVpExitReasonX64InterruptWindow:
+				return true;
 
 			case WHvRunVpExitReasonX64Halt:
 				WaitForSingleObject ( threads [ index ].wake, 10 );
@@ -511,17 +727,124 @@ namespace hv {
 
 	bool machine::inject_fault ( uint32_t index, const cpu_state& cpu ) {
 
-		WHV_REGISTER_NAME names [ 2 ] = { WHvX64RegisterCr2, WHvRegisterPendingInterruption };
-		WHV_REGISTER_VALUE values [ 2 ] = { };
+		WHV_REGISTER_NAME name = WHvX64RegisterCr2;
+		WHV_REGISTER_VALUE value = { };
 
-		values [ 0 ].Reg64 = cpu.fault_address;
-		values [ 1 ].PendingInterruption.InterruptionPending = 1;
-		values [ 1 ].PendingInterruption.InterruptionType = WHvX64PendingException;
-		values [ 1 ].PendingInterruption.DeliverErrorCode = 1;
-		values [ 1 ].PendingInterruption.InterruptionVector = 14;
-		values [ 1 ].PendingInterruption.ErrorCode = cpu.fault_code;
+		value.Reg64 = cpu.fault_address;
 
-		return core.set_registers ( index, names, 2, values ) || fail ( index, "couldn't deliver a page fault to the guest", nullptr, 0 );
+		if ( !core.set_registers ( index, &name, 1, &value ) )
+			return fail ( index, "couldn't set CR2 for a page fault", nullptr, 0 );
+
+		return raise ( index, 14, cpu.fault_code );
+
+	}
+
+	bool machine::raise ( uint32_t index, uint32_t vector, uint32_t code ) {
+
+		WHV_REGISTER_NAME name = WHvRegisterPendingInterruption;
+		WHV_REGISTER_VALUE value = { };
+
+		value.PendingInterruption.InterruptionPending = 1;
+		value.PendingInterruption.InterruptionType = WHvX64PendingException;
+		value.PendingInterruption.DeliverErrorCode = 1;
+		value.PendingInterruption.InterruptionVector = vector;
+		value.PendingInterruption.ErrorCode = code;
+
+		return core.set_registers ( index, &name, 1, &value ) || fail ( index, "couldn't deliver an exception to the guest", nullptr, 0 );
+
+	}
+
+	bool machine::deliver_external ( uint32_t index ) {
+
+		WHV_REGISTER_NAME names [ 4 ] = { WHvRegisterPendingEvent, WHvX64RegisterRflags, WHvRegisterInterruptState, WHvRegisterInternalActivityState };
+		WHV_REGISTER_VALUE values [ 4 ] = { };
+
+		if ( !core.registers ( index, names, 4, values ) )
+			return fail ( index, "couldn't read the interrupt state", nullptr, 0 );
+
+		bool open = ( values [ 1 ].Reg64 & 0x200 ) && !values [ 2 ].InterruptState.InterruptShadow;
+
+		if ( values [ 0 ].ExtIntEvent.EventPending || !open ) {
+
+			WHV_REGISTER_NAME window = WHvX64RegisterDeliverabilityNotifications;
+			WHV_REGISTER_VALUE notify = { };
+
+			notify.DeliverabilityNotifications.InterruptNotification = 1;
+
+			return core.set_registers ( index, &window, 1, &notify ) || fail ( index, "couldn't ask for an interrupt window", nullptr, 0 );
+
+		}
+
+		long vector = InterlockedExchange ( &pending [ index ], 0 );
+
+		if ( !vector )
+			return true;
+
+		WHV_REGISTER_NAME updates [ 2 ] = { WHvRegisterPendingEvent, WHvRegisterInternalActivityState };
+		WHV_REGISTER_VALUE changes [ 2 ] = { };
+
+		changes [ 0 ].ExtIntEvent.EventPending = 1;
+		changes [ 0 ].ExtIntEvent.EventType = WHvX64PendingEventExtInt;
+		changes [ 0 ].ExtIntEvent.Vector = static_cast < uint64_t > ( vector & 0xFF );
+		changes [ 1 ] = values [ 3 ];
+		changes [ 1 ].InternalActivity.HaltSuspend = 0;
+
+		return core.set_registers ( index, updates, 2, changes ) || fail ( index, "couldn't queue an external interrupt", nullptr, 0 );
+
+	}
+
+	bool machine::read_msr ( uint32_t index, uint32_t msr, uint64_t& value ) const {
+
+		int32_t slot = mtrr_slot ( msr );
+
+		if ( slot >= 0 ) {
+
+			value = mtrrs [ index ] [ slot ];
+
+			return true;
+
+		}
+
+		switch ( msr ) {
+
+			case 0x0000003A:
+				value = 1;
+				return true;
+
+			case 0x0000008B:
+			case 0x00000179:
+			case 0x0000017A:
+				value = 0;
+				return true;
+
+			case 0x000000FE:
+				value = 0x508;
+				return true;
+
+			case 0x000001A0:
+				value = 1;
+				return true;
+
+			default:
+				return false;
+
+		}
+
+	}
+
+	bool machine::write_msr ( uint32_t index, uint32_t msr, uint64_t value ) {
+
+		int32_t slot = mtrr_slot ( msr );
+
+		if ( slot >= 0 ) {
+
+			mtrrs [ index ] [ slot ] = value;
+
+			return true;
+
+		}
+
+		return msr == 0x0000008B || msr == 0x0000017A || msr == 0x000001A0;
 
 	}
 

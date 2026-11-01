@@ -15,6 +15,14 @@ namespace hv {
 
 	};
 
+	struct eoi_listener {
+
+		virtual ~eoi_listener ( ) = default;
+
+		virtual void eoi ( uint32_t vector ) = 0;
+
+	};
+
 	enum stop_reason : uint8_t {
 
 		STOP_NONE,
@@ -58,7 +66,19 @@ namespace hv {
 
 		void stop ( );
 
-		bool interrupt ( uint32_t destination, uint32_t vector );
+		bool interrupt ( uint32_t destination, uint32_t vector, bool logical = false, bool level = false, uint32_t type = 0 );
+
+		bool external ( uint32_t processor, uint32_t vector );
+
+		void listen_eoi ( eoi_listener* target ) {
+
+			eoi_target = target;
+
+		}
+
+		bool pause ( );
+
+		void resume ( );
 
 		void read ( uint64_t address, uint8_t* out, uint32_t size ) override;
 
@@ -82,6 +102,7 @@ namespace hv {
 
 		partition core;
 		stop_reason reason = STOP_NONE;
+		volatile long msr_exits = 0;
 		char problem [ 200 ] = { };
 
 	private:
@@ -121,6 +142,14 @@ namespace hv {
 
 		bool inject_fault ( uint32_t index, const cpu_state& cpu );
 
+		bool raise ( uint32_t index, uint32_t vector, uint32_t code );
+
+		bool deliver_external ( uint32_t index );
+
+		bool read_msr ( uint32_t index, uint32_t msr, uint64_t& value ) const;
+
+		bool write_msr ( uint32_t index, uint32_t msr, uint64_t value );
+
 		bool fail ( uint32_t index, const char* text, const uint8_t* bytes, uint32_t count );
 
 		device* find_memory ( uint64_t address, uint32_t size ) const;
@@ -128,9 +157,16 @@ namespace hv {
 		base::list < port_range > port_ranges;
 		base::list < memory_range > memory_ranges;
 		processor_thread threads [ max_processors ];
+		volatile long pending [ max_processors ] = { };
+		uint64_t mtrrs [ max_processors ] [ 28 ] = { };
+		eoi_listener* eoi_target = nullptr;
 		uint32_t thread_count = 0;
 		volatile long quit = 0;
 		volatile long failed = 0;
+		volatile long pausing = 0;
+		volatile long parked = 0;
+		HANDLE resume_event = nullptr;
+		HANDLE parked_event = nullptr;
 		SRWLOCK device_lock = SRWLOCK_INIT;
 
 	};
