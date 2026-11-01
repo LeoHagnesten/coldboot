@@ -25,6 +25,9 @@
     <Filter Include="src\firmware">
       <UniqueIdentifier>{A1F4C8D2-6E39-5B47-9C81-3D5E2F7A04B6}</UniqueIdentifier>
     </Filter>
+    <Filter Include="src\hv">
+      <UniqueIdentifier>{3C6F9A21-8D4E-5B17-A2C3-6F18E9D0B472}</UniqueIdentifier>
+    </Filter>
     <Filter Include="src\input">
       <UniqueIdentifier>{896B514D-BFA7-5D6B-B8F9-650DD277D1FE}</UniqueIdentifier>
     </Filter>
@@ -64,6 +67,7 @@
     <ClCompile Include="src\chipset\*.cc"><Filter>src\chipset</Filter></ClCompile>
     <ClCompile Include="src\cpu\*.cc"><Filter>src\cpu</Filter></ClCompile>
     <ClCompile Include="src\firmware\*.cc"><Filter>src\firmware</Filter></ClCompile>
+    <ClCompile Include="src\hv\*.cc"><Filter>src\hv</Filter></ClCompile>
     <ClCompile Include="src\input\*.cc"><Filter>src\input</Filter></ClCompile>
     <ClCompile Include="src\machine\*.cc"><Filter>src\machine</Filter></ClCompile>
     <ClCompile Include="src\render\*.cc"><Filter>src\render</Filter></ClCompile>
@@ -81,6 +85,7 @@
     <ClInclude Include="src\chipset\*.hh"><Filter>src\chipset</Filter></ClInclude>
     <ClInclude Include="src\cpu\*.hh"><Filter>src\cpu</Filter></ClInclude>
     <ClInclude Include="src\firmware\*.hh"><Filter>src\firmware</Filter></ClInclude>
+    <ClInclude Include="src\hv\*.hh"><Filter>src\hv</Filter></ClInclude>
     <ClInclude Include="src\input\*.hh"><Filter>src\input</Filter></ClInclude>
     <ClInclude Include="src\machine\*.hh"><Filter>src\machine</Filter></ClInclude>
     <ClInclude Include="src\render\*.hh"><Filter>src\render</Filter></ClInclude>

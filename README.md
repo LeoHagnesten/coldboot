@@ -39,7 +39,7 @@ Coldboot powers on into its own BIOS, which it assembles from source every time 
 - F11 is fullscreen, F12 saves a screenshot to `Pictures\Coldboot`, and Pause stops the clock.
 - The pill next to the floppy button switches between a real 4.77 MHz and turbo, which runs as fast as your CPU allows.
 - The floppy panel inserts, ejects and write-protects disks, and makes blank FAT12 disks from 360 KB to 1.44 MB.
-- Settings cover speed, sharp or CRT display, dark or light theme, real or fast floppy timing, memory size, and Coldboot's BIOS or a ROM of your own.
+- Settings cover speed, sharp or CRT display, a theme that follows Windows or stays dark or light, real or fast floppy timing, memory size, and Coldboot's BIOS or a ROM of your own.
 
 To try it, get the [FreeDOS 1.3 Floppy Edition](https://www.freedos.org/download/) and drop `x86BOOT.img` from the `720k` folder on the window.
 
@@ -64,7 +64,7 @@ Coldboot.exe --own [--a <image>] [--b <image>] <steps>
 Coldboot.exe --smoke <folder> [<image>]
 ```
 
-- `--test` runs 104 checks across the CPU, the chips, the floppy controller, the assembler, disk images, the BIOS and save states.
+- `--test` runs 107 checks across the CPU, the chips, the floppy controller, the assembler, disk images, the BIOS, save states and the hypervisor engine. The hypervisor checks are skipped on PCs without the Windows Hypervisor Platform.
 - `--cpu` runs SingleStepTests. It also takes `--only <prefix>`, `--exact` and `--timing`.
 - `--own` boots the built-in BIOS and works through the steps in order. `--a` and `--b` take `.asm` files too:
   - `--run <seconds>` runs emulated time

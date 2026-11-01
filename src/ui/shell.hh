@@ -35,6 +35,7 @@ namespace ui {
 		CONTROL_SPEED_TURBO,
 		CONTROL_DISPLAY_SHARP,
 		CONTROL_DISPLAY_CRT,
+		CONTROL_THEME_SYSTEM,
 		CONTROL_THEME_DARK,
 		CONTROL_THEME_LIGHT,
 		CONTROL_FLOPPY_REAL,
@@ -78,6 +79,7 @@ namespace ui {
 		bool turbo = false;
 		bool crt = false;
 		bool light = false;
+		int32_t theme = 0;
 		bool fast_floppy = false;
 		bool custom_bios = false;
 		bool captured = false;

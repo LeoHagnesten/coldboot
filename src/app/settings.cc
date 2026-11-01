@@ -94,9 +94,14 @@ namespace app {
 
 			if ( equals < line + length ) {
 
-				if ( key_is ( line, length, "light" ) )
-					out.light = number ( value, size ) != 0;
-				else if ( key_is ( line, length, "turbo" ) )
+				if ( key_is ( line, length, "theme" ) )
+					out.theme = static_cast < theme_choice > ( base::clamp ( number ( value, size ), 0, 2 ) );
+				else if ( key_is ( line, length, "light" ) ) {
+
+					if ( number ( value, size ) != 0 )
+						out.theme = THEME_LIGHT;
+
+				} else if ( key_is ( line, length, "turbo" ) )
 					out.turbo = number ( value, size ) != 0;
 				else if ( key_is ( line, length, "crt" ) )
 					out.crt = number ( value, size ) != 0;
@@ -184,7 +189,7 @@ namespace app {
 
 		base::list < char > out;
 
-		put_number ( out, "light", in.light );
+		put_number ( out, "theme", in.theme );
 		put_number ( out, "turbo", in.turbo );
 		put_number ( out, "crt", in.crt );
 		put_number ( out, "fast_floppy", in.fast_floppy );
@@ -199,6 +204,21 @@ namespace app {
 		put_path ( out, "disk_a", in.disks [ 0 ] );
 		put_path ( out, "disk_b", in.disks [ 1 ] );
 		files::write_later ( data_path ( L"settings.ini" ), out.data ( ), out.count ( ) );
+
+	}
+
+	bool system_light ( ) {
+
+		DWORD value = 0;
+		DWORD size = sizeof ( value );
+
+		return RegGetValueW ( HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize", L"AppsUseLightTheme", RRF_RT_REG_DWORD, nullptr, &value, &size ) == ERROR_SUCCESS && value != 0;
+
+	}
+
+	bool use_light ( const settings& in ) {
+
+		return in.theme == THEME_LIGHT || ( in.theme == THEME_SYSTEM && system_light ( ) );
 
 	}
 

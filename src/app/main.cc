@@ -33,6 +33,7 @@ static HWND main_window = nullptr;
 static HHOOK keyboard_hook = nullptr;
 static WINDOWPLACEMENT saved_place = { sizeof ( WINDOWPLACEMENT ) };
 static bool fullscreen = false;
+static bool light_mode = false;
 static bool captured = false;
 static bool tracking = false;
 static bool held [ 128 ] = { };
@@ -96,9 +97,11 @@ static void store_settings ( ) {
 
 static void apply_theme ( ) {
 
-	BOOL dark = config.light ? FALSE : TRUE;
-	COLORREF caption = config.light ? RGB ( 0xF8, 0xF8, 0xF6 ) : RGB ( 0x15, 0x16, 0x1A );
-	COLORREF text = config.light ? RGB ( 0x1A, 0x1B, 0x1E ) : RGB ( 0xEC, 0xED, 0xEF );
+	light_mode = app::use_light ( config );
+
+	BOOL dark = light_mode ? FALSE : TRUE;
+	COLORREF caption = light_mode ? RGB ( 0xF8, 0xF8, 0xF6 ) : RGB ( 0x15, 0x16, 0x1A );
+	COLORREF text = light_mode ? RGB ( 0x1A, 0x1B, 0x1E ) : RGB ( 0xEC, 0xED, 0xEF );
 
 	DwmSetWindowAttribute ( main_window, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof ( dark ) );
 	DwmSetWindowAttribute ( main_window, 35, &caption, sizeof ( caption ) );
@@ -143,7 +146,8 @@ static void render_frame ( ) {
 	state.paused = emulator->paused;
 	state.turbo = config.turbo;
 	state.crt = config.crt;
-	state.light = config.light;
+	state.light = light_mode;
+	state.theme = config.theme;
 	state.fast_floppy = config.fast_floppy;
 	state.custom_bios = config.custom_bios;
 	state.captured = captured;
@@ -623,9 +627,11 @@ static void act ( ui::control id ) {
 			render_frame ( );
 			return;
 
+		case ui::CONTROL_THEME_SYSTEM:
 		case ui::CONTROL_THEME_DARK:
 		case ui::CONTROL_THEME_LIGHT:
-			set_option ( config.light, id == ui::CONTROL_THEME_LIGHT );
+			config.theme = id == ui::CONTROL_THEME_SYSTEM ? app::THEME_SYSTEM : ( id == ui::CONTROL_THEME_DARK ? app::THEME_DARK : app::THEME_LIGHT );
+			store_settings ( );
 			apply_theme ( );
 			render_frame ( );
 			return;
@@ -716,7 +722,7 @@ static void smoke_tick ( ) {
 		bool saved = emulator->save_state ( state_path.text ( ) );
 		bool loaded = saved && emulator->load_state ( state_path.text ( ) );
 
-		report.add ( L"speed " ).fixed ( emulator->speed ( ), 2 ).add ( L" MHz\r\nsaved " ).add ( saved ? L"yes" : L"no" ).add ( L"\r\nloaded " ).add ( loaded ? L"yes" : L"no" ).add ( L"\r\npost " ).number ( emulator->post_code ( ) ).add ( L"\r\n" );
+		report.add ( L"speed " ).fixed ( emulator->speed ( ), 2 ).add ( L" MHz\r\nsaved " ).add ( saved ? L"yes" : L"no" ).add ( L"\r\nloaded " ).add ( loaded ? L"yes" : L"no" ).add ( L"\r\npost " ).number ( emulator->post_code ( ) ).add ( L"\r\ntheme " ).add ( light_mode ? L"light" : L"dark" ).add ( L"\r\n" );
 
 		char bytes [ 512 ];
 		int32_t size = WideCharToMultiByte ( CP_UTF8, 0, report.text ( ), report.size ( ), bytes, sizeof ( bytes ), nullptr, nullptr );
@@ -725,7 +731,8 @@ static void smoke_tick ( ) {
 		report_path.add ( smoke_folder ).add ( L"\\smoke.txt" );
 		files::write ( report_path.text ( ), bytes, size );
 		frontend->popover = ui::POPOVER_NONE;
-		config.light = true;
+		config.theme = app::THEME_LIGHT;
+		apply_theme ( );
 		frontend->toast ( L"State saved", seconds ( ) );
 		smoke_step = 4;
 
@@ -964,6 +971,17 @@ static LRESULT __stdcall procedure ( HWND window, UINT message, WPARAM wide, LPA
 		case WM_CHAR:
 			return 0;
 
+		case WM_SETTINGCHANGE:
+
+			if ( extra && base::same_text ( reinterpret_cast < const wchar_t* > ( extra ), L"ImmersiveColorSet" ) ) {
+
+				apply_theme ( );
+				render_frame ( );
+
+			}
+
+			break;
+
 		case WM_ACTIVATE:
 
 			if ( LOWORD ( wide ) == WA_INACTIVE ) {
@@ -1108,6 +1126,8 @@ int program_main ( ) {
 		config.turbo = true;
 	else
 		app::load_settings ( config );
+
+	light_mode = app::use_light ( config );
 
 	HINSTANCE instance = GetModuleHandleW ( nullptr );
 	WNDCLASSEXW type = { };

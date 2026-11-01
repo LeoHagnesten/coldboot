@@ -5,9 +5,17 @@
 
 namespace app {
 
+	enum theme_choice : uint8_t {
+
+		THEME_SYSTEM,
+		THEME_DARK,
+		THEME_LIGHT,
+
+	};
+
 	struct settings {
 
-		bool light = false;
+		theme_choice theme = THEME_SYSTEM;
 		bool turbo = false;
 		bool crt = false;
 		bool fast_floppy = false;
@@ -28,5 +36,9 @@ namespace app {
 	void save_settings ( const settings& in );
 
 	const wchar_t* data_path ( const wchar_t* name );
+
+	bool system_light ( );
+
+	bool use_light ( const settings& in );
 
 }

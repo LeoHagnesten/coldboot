@@ -116,8 +116,8 @@ namespace ui {
 		static const wchar_t* const speed_labels [ 2 ] = { L"4.77 MHz", L"Turbo" };
 		static const control display_ids [ 2 ] = { CONTROL_DISPLAY_SHARP, CONTROL_DISPLAY_CRT };
 		static const wchar_t* const display_labels [ 2 ] = { L"Sharp", L"CRT" };
-		static const control theme_ids [ 2 ] = { CONTROL_THEME_DARK, CONTROL_THEME_LIGHT };
-		static const wchar_t* const theme_labels [ 2 ] = { L"Dark", L"Light" };
+		static const control theme_ids [ 3 ] = { CONTROL_THEME_SYSTEM, CONTROL_THEME_DARK, CONTROL_THEME_LIGHT };
+		static const wchar_t* const theme_labels [ 3 ] = { L"System", L"Dark", L"Light" };
 		static const control floppy_ids [ 2 ] = { CONTROL_FLOPPY_REAL, CONTROL_FLOPPY_FAST };
 		static const wchar_t* const floppy_labels [ 2 ] = { L"Real speed", L"Fast" };
 		static const control memory_ids [ 3 ] = { CONTROL_MEMORY_256, CONTROL_MEMORY_512, CONTROL_MEMORY_640 };
@@ -127,7 +127,7 @@ namespace ui {
 
 		row ( L"Speed", speed_ids, speed_labels, 2, state.turbo ? 1 : 0 );
 		row ( L"Display", display_ids, display_labels, 2, state.crt ? 1 : 0 );
-		row ( L"Theme", theme_ids, theme_labels, 2, state.light ? 1 : 0 );
+		row ( L"Theme", theme_ids, theme_labels, 3, base::clamp ( state.theme, 0, 2 ) );
 		row ( L"Floppy drives", floppy_ids, floppy_labels, 2, state.fast_floppy ? 1 : 0 );
 		row ( L"Memory", memory_ids, memory_labels, 3, state.memory <= 256 ? 0 : ( state.memory <= 512 ? 1 : 2 ) );
 		row ( L"BIOS", bios_ids, bios_labels, 2, state.custom_bios ? 1 : 0 );

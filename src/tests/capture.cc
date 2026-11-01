@@ -377,6 +377,7 @@ namespace tests {
 			state.turbo = options.turbo;
 			state.crt = options.crt;
 			state.light = options.light;
+			state.theme = options.light ? 2 : 0;
 			state.fast_floppy = options.fast;
 			state.captured = options.captured;
 			state.can_load = true;
