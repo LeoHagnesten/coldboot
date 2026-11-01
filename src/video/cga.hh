@@ -37,6 +37,14 @@ namespace machine {
 
 		void out ( uint16_t port, uint8_t value ) override;
 
+		void transfer ( archive& io );
+
+		void refresh ( ) {
+
+			render ( );
+
+		}
+
 		const uint64_t* clock = nullptr;
 		uint32_t* pixels = nullptr;
 		int32_t width = 640;

@@ -21,6 +21,8 @@ namespace machine {
 
 		void out ( uint16_t port, uint8_t value ) override;
 
+		void transfer ( archive& io );
+
 		uint8_t irr = 0;
 		uint8_t isr = 0;
 		uint8_t imr = 0xFF;

@@ -27,6 +27,8 @@ namespace machine {
 
 		void interrupt ( uint8_t vector );
 
+		void transfer ( archive& io );
+
 		bool interrupt_waiting ( ) const {
 
 			return nmi || ( ( state.flags & FLAG_INTERRUPT ) && controller && controller->pending ( ) );

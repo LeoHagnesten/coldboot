@@ -1,6 +1,14 @@
 #include "chipset/ppi.hh"
+#include "machine/archive.hh"
 
 namespace machine {
+
+	void ppi::transfer ( archive& io ) {
+
+		io.field ( port_b );
+		io.field ( switches );
+
+	}
 
 	void ppi::reset ( ) {
 

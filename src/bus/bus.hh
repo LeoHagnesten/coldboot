@@ -4,6 +4,8 @@
 
 namespace machine {
 
+	class archive;
+
 	struct port_device {
 
 		virtual uint8_t in ( uint16_t port ) = 0;
@@ -67,6 +69,8 @@ namespace machine {
 		bool load_rom ( uint32_t base, const uint8_t* data, uint32_t size );
 
 		void clear ( );
+
+		void transfer ( archive& io );
 
 		uint8_t* backing ( uint32_t offset ) {
 

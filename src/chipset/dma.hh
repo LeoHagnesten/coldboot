@@ -37,6 +37,8 @@ namespace machine {
 
 		void out ( uint16_t port, uint8_t value ) override;
 
+		void transfer ( archive& io );
+
 		dma_channel channels [ 4 ];
 		uint8_t command = 0;
 		uint8_t status = 0;
@@ -58,6 +60,8 @@ namespace machine {
 		uint8_t in ( uint16_t port ) override;
 
 		void out ( uint16_t port, uint8_t value ) override;
+
+		uint8_t post_code = 0;
 
 	private:
 

@@ -262,6 +262,8 @@ namespace tests {
 		delete memory;
 		device_tests ( );
 		storage_tests ( );
+		assembler_tests ( );
+		bios_tests ( );
 		print ( failure_count ( ) ? "\r\nSome tests failed.\r\n" : "\r\nAll tests passed.\r\n" );
 
 		return failure_count ( );

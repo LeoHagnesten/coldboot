@@ -1,6 +1,8 @@
 #ifdef COLDBOOT_DEBUG
 
 #include "machine/xt.hh"
+#include "storage/blank.hh"
+#include "storage/program.hh"
 #include "tests/harness.hh"
 #include "tests/program.hh"
 
@@ -404,12 +406,38 @@ namespace tests {
 
 	}
 
+	static void image_tests ( ) {
+
+		base::list < uint8_t > disk;
+		bool made = machine::make_blank_disk ( 1474560, 0x1234ABCD, disk );
+
+		expect ( made && disk.count ( ) == 1474560 && disk [ 0 ] == 0xEB && disk [ 0x0C ] == 0x02 && disk [ 0x11 ] == 0xE0 && disk [ 0x15 ] == 0xF0 && disk [ 0x18 ] == 18 && disk [ 510 ] == 0x55 && disk [ 511 ] == 0xAA && disk [ 512 ] == 0xF0, "disks: a blank 1.44 MB image gets a boot sector, a BPB and empty FATs" );
+
+		static const char* const source = "org 0x7C00\r\nmov ax, 0x1234\r\njmp $\r\n";
+		char error [ 160 ] = { };
+		uint32_t used = 0;
+
+		made = machine::make_program_disk ( source, base::text_length ( source ), disk, used, error, sizeof ( error ) );
+
+		bool named = machine::is_program_path ( L"C:\\demos\\Mandelbrot.ASM" ) && !machine::is_program_path ( L"C:\\disks\\asm.img" );
+
+		expect ( made && named && used == 5 && disk.count ( ) == static_cast < int32_t > ( machine::program_disk_size ) && disk [ 0 ] == 0xB8 && disk [ 2 ] == 0x12 && disk [ 3 ] == 0xEB && disk [ 4 ] == 0xFE && disk [ 510 ] == 0x55 && disk [ 511 ] == 0xAA, "disks: an .asm file with CRLF lines becomes a bootable 360 KB image" );
+
+		static const char* const broken = "org 0x7C00\nmov ax, 1\nfrobnicate ax\n";
+
+		made = machine::make_program_disk ( broken, base::text_length ( broken ), disk, used, error, sizeof ( error ) );
+
+		expect ( !made && error [ 0 ] == 'l' && error [ 5 ] == '3' && error [ 6 ] == ':', "disks: a broken program reports the line it broke on" );
+
+	}
+
 	void storage_tests ( ) {
 
 		print ( "\r\n" );
 		format_tests ( );
 		controller_tests ( );
 		boot_tests ( );
+		image_tests ( );
 
 	}
 

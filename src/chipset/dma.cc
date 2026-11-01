@@ -1,6 +1,19 @@
 #include "chipset/dma.hh"
+#include "machine/archive.hh"
 
 namespace machine {
+
+	void dma::transfer ( archive& io ) {
+
+		io.field ( channels );
+		io.field ( command );
+		io.field ( status );
+		io.field ( request );
+		io.field ( masks );
+		io.field ( temporary );
+		io.field ( flip );
+
+	}
 
 	void dma::reset ( ) {
 
@@ -187,6 +200,9 @@ namespace machine {
 	void dma_pages::out ( uint16_t port, uint8_t value ) {
 
 		static const uint8_t owners [ 4 ] = { 0, 2, 3, 1 };
+
+		if ( ( port & 0x1F ) == 0 )
+			post_code = value;
 
 		controller.channels [ owners [ port & 3 ] ].page = static_cast < uint8_t > ( value & 0x0F );
 

@@ -32,69 +32,22 @@
     <TargetName>Coldboot</TargetName>
   </PropertyGroup>
   <ItemGroup>
-    <ClCompile Include="src\app\audio.cc" />
-    <ClCompile Include="src\app\keys.cc" />
-    <ClCompile Include="src\app\main.cc" />
-    <ClCompile Include="src\app\session.cc" />
-    <ClCompile Include="src\app\settings.cc" />
-    <ClCompile Include="src\base\base.cc" />
-    <ClCompile Include="src\base\files.cc" />
-    <ClCompile Include="src\base\inflate.cc" />
-    <ClCompile Include="src\base\math.cc" />
-    <ClCompile Include="src\base\png.cc" />
-    <ClCompile Include="src\bus\bus.cc" />
-    <ClCompile Include="src\chipset\dma.cc" />
-    <ClCompile Include="src\chipset\pic.cc" />
-    <ClCompile Include="src\chipset\pit.cc" />
-    <ClCompile Include="src\chipset\ppi.cc" />
-    <ClCompile Include="src\cpu\cpu.cc" />
-    <ClCompile Include="src\cpu\execute.cc" />
-    <ClCompile Include="src\input\keyboard.cc" />
-    <ClCompile Include="src\machine\xt.cc" />
-    <ClCompile Include="src\runtime\common.cc" />
-    <ClCompile Include="src\runtime\memory.cc" />
-    <ClCompile Include="src\runtime\rounding.cc" />
-    <ClCompile Include="src\runtime\startup.cc" />
-    <ClCompile Include="src\storage\fdc.cc" />
-    <ClCompile Include="src\storage\floppy.cc" />
-    <ClCompile Include="src\tests\capture.cc" />
-    <ClCompile Include="src\tests\devices.cc" />
-    <ClCompile Include="src\tests\entry.cc" />
-    <ClCompile Include="src\tests\foundation.cc" />
-    <ClCompile Include="src\tests\harness.cc" />
-    <ClCompile Include="src\tests\single_step.cc" />
-    <ClCompile Include="src\tests\storage.cc" />
-    <ClCompile Include="src\video\cga.cc" />
-    <ClCompile Include="src\video\font.cc" />
+    <ClCompile Include="src\**\*.cc" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="src\app\audio.hh" />
-    <ClInclude Include="src\app\keys.hh" />
-    <ClInclude Include="src\app\session.hh" />
-    <ClInclude Include="src\app\settings.hh" />
-    <ClInclude Include="src\base\base.hh" />
-    <ClInclude Include="src\base\files.hh" />
-    <ClInclude Include="src\base\inflate.hh" />
-    <ClInclude Include="src\base\math.hh" />
-    <ClInclude Include="src\base\png.hh" />
-    <ClInclude Include="src\bus\bus.hh" />
-    <ClInclude Include="src\chipset\dma.hh" />
-    <ClInclude Include="src\chipset\pic.hh" />
-    <ClInclude Include="src\chipset\pit.hh" />
-    <ClInclude Include="src\chipset\ppi.hh" />
-    <ClInclude Include="src\cpu\cpu.hh" />
-    <ClInclude Include="src\cpu\registers.hh" />
-    <ClInclude Include="src\input\keyboard.hh" />
-    <ClInclude Include="src\machine\xt.hh" />
-    <ClInclude Include="src\runtime\runtime.hh" />
-    <ClInclude Include="src\storage\fdc.hh" />
-    <ClInclude Include="src\storage\floppy.hh" />
-    <ClInclude Include="src\tests\harness.hh" />
-    <ClInclude Include="src\tests\program.hh" />
-    <ClInclude Include="src\video\cga.hh" />
+    <ClInclude Include="src\**\*.hh" />
+  </ItemGroup>
+  <ItemGroup>
+    <FxCompile Include="src\render\shaders\*_vs.hlsl">
+      <ShaderType>Vertex</ShaderType>
+    </FxCompile>
+    <FxCompile Include="src\render\shaders\*_ps.hlsl">
+      <ShaderType>Pixel</ShaderType>
+    </FxCompile>
   </ItemGroup>
   <ItemGroup>
     <None Include="assets\coldboot.manifest" />
+    <None Include="src\firmware\*.asm" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="assets\coldboot.rc" />

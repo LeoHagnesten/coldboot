@@ -47,6 +47,8 @@ namespace machine {
 
 		void out ( uint16_t port, uint8_t value ) override;
 
+		void transfer ( archive& io );
+
 		pit_channel channels [ 3 ];
 
 	};

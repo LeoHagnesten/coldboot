@@ -1,6 +1,27 @@
 #include "chipset/pic.hh"
+#include "machine/archive.hh"
 
 namespace machine {
+
+	void pic::transfer ( archive& io ) {
+
+		io.field ( irr );
+		io.field ( isr );
+		io.field ( imr );
+		io.field ( vector_base );
+		io.field ( lines );
+		io.field ( lowest );
+		io.field ( init_step );
+		io.field ( level );
+		io.field ( single );
+		io.field ( needs_icw4 );
+		io.field ( auto_eoi );
+		io.field ( rotate_on_auto_eoi );
+		io.field ( special_mask );
+		io.field ( read_service );
+		io.field ( poll );
+
+	}
 
 	void pic::reset ( ) {
 

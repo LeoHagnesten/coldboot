@@ -1,6 +1,13 @@
 #include "chipset/pit.hh"
+#include "machine/archive.hh"
 
 namespace machine {
+
+	void pit::transfer ( archive& io ) {
+
+		io.field ( channels );
+
+	}
 
 	static uint32_t from_bcd ( uint16_t value ) {
 

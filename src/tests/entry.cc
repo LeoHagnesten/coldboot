@@ -29,7 +29,7 @@ bool test_main ( int32_t& result ) {
 			exact = true;
 		else if ( base::same_text ( arguments [ i ], L"--timing" ) )
 			timing = true;
-		else if ( base::same_text ( arguments [ i ], L"--bios" ) && !mode )
+		else if ( ( base::same_text ( arguments [ i ], L"--bios" ) || base::same_text ( arguments [ i ], L"--own" ) || base::same_text ( arguments [ i ], L"--asm" ) ) && !mode )
 			mode = 3;
 
 	}

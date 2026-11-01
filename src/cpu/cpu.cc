@@ -1,6 +1,20 @@
 #include "cpu/cpu.hh"
+#include "machine/archive.hh"
 
 namespace machine {
+
+	void cpu::transfer ( archive& io ) {
+
+		io.field ( state );
+		io.field ( cycles );
+		io.field ( instructions );
+		io.field ( queue );
+		io.field ( halted );
+		io.field ( nmi );
+		io.field ( inhibit );
+		io.field ( vectored );
+
+	}
 
 	void cpu::reset ( ) {
 

@@ -1,6 +1,85 @@
 #include "machine/xt.hh"
+#include "firmware/firmware.hh"
+#include "machine/archive.hh"
 
 namespace machine {
+
+	static constexpr uint32_t state_magic = 0x54534243;
+	static constexpr uint32_t state_version = 1;
+
+	void xt::transfer ( archive& io ) {
+
+		io.field ( memory_kilobytes );
+		io.field ( bios_loaded );
+		io.field ( timer_phase );
+		io.field ( sample_phase );
+		io.field ( level_sum );
+		io.field ( level_ticks );
+		io.field ( timer0 );
+		io.field ( timer1 );
+		io.field ( nmi.enabled );
+		io.field ( pages.post_code );
+		memory.transfer ( io );
+		core.transfer ( io );
+		interrupts.transfer ( io );
+		timer.transfer ( io );
+		transfers.transfer ( io );
+		keys.transfer ( io );
+		peripheral.transfer ( io );
+		video.transfer ( io );
+		floppy.transfer ( io );
+
+	}
+
+	void xt::save_state ( base::list < uint8_t >& out ) {
+
+		archive io ( out );
+		uint32_t magic = state_magic;
+		uint32_t version = state_version;
+
+		out.clear ( );
+		io.field ( magic );
+		io.field ( version );
+		transfer ( io );
+
+	}
+
+	bool xt::load_state ( const uint8_t* data, uint32_t size ) {
+
+		archive check ( data, size );
+		uint32_t magic = 0;
+		uint32_t version = 0;
+
+		check.field ( magic );
+		check.field ( version );
+
+		if ( check.failed || magic != state_magic || version != state_version )
+			return false;
+
+		base::list < uint8_t > backup;
+
+		save_state ( backup );
+
+		archive io ( data + 8, size - 8 );
+
+		transfer ( io );
+
+		if ( io.failed ) {
+
+			archive restore ( backup.data ( ) + 8, static_cast < uint32_t > ( backup.count ( ) ) - 8 );
+
+			transfer ( restore );
+
+			return false;
+
+		}
+
+		sample_count = 0;
+		interrupts.set_line ( 0, timer0 );
+
+		return true;
+
+	}
 
 	xt::xt ( ) : core ( memory ), pages ( transfers ), peripheral ( keys, timer ), video ( memory ), floppy ( transfers, memory ) {
 
@@ -49,6 +128,17 @@ namespace machine {
 		runtime_release ( image );
 
 		return bios_loaded;
+
+	}
+
+	bool xt::load_builtin ( char* error, int32_t error_room, int32_t* error_line ) {
+
+		base::list < uint8_t > rom;
+
+		if ( !firmware::build ( rom, error, error_room, error_line ) )
+			return false;
+
+		return load_bios ( rom.data ( ), static_cast < uint32_t > ( rom.count ( ) ) );
 
 	}
 

@@ -1,4 +1,5 @@
 #include "storage/fdc.hh"
+#include "machine/archive.hh"
 
 namespace machine {
 
@@ -76,6 +77,73 @@ namespace machine {
 
 	}
 
+	void fdc::transfer ( archive& io ) {
+
+		int32_t place_offset = place ? static_cast < int32_t > ( place - drives [ unit ].disk.bytes.data ( ) ) : -1;
+
+		io.field ( output );
+		io.field ( step_rate );
+		io.field ( phase );
+		io.field ( wait );
+		io.field ( offset );
+		io.field ( command );
+		io.field ( result );
+		io.field ( id );
+		io.field ( received );
+		io.field ( needed );
+		io.field ( result_size );
+		io.field ( result_index );
+		io.field ( reset_reports );
+		io.field ( unit );
+		io.field ( head );
+		io.field ( last_record );
+		io.field ( format_count );
+		io.field ( formatted );
+		io.field ( field );
+		io.field ( filler );
+		io.field ( task );
+		io.field ( multi_track );
+		io.field ( terminal );
+		io.field ( stalled );
+		io.field ( pending );
+		io.field ( result_clears );
+		io.field ( place_offset );
+
+		for ( floppy_drive& drive : drives ) {
+
+			io.field ( drive.seek_wait );
+			io.field ( drive.cylinder );
+			io.field ( drive.target );
+			io.field ( drive.side );
+			io.field ( drive.status );
+			io.field ( drive.seeking );
+			io.field ( drive.calibrating );
+			io.field ( drive.reported );
+			drive.disk.transfer ( io );
+
+		}
+
+		if ( io.writing ( ) )
+			return;
+
+		bool sane = unit < drive_count && received < 9 && needed <= 9 && result_size <= 7 && result_index <= 7 && offset <= floppy::sector_size && phase <= FDC_RESULT && task <= TASK_IDENTIFY;
+
+		if ( !sane ) {
+
+			io.failed = true;
+			clear_controller ( );
+
+			return;
+
+		}
+
+		place = nullptr;
+
+		if ( place_offset >= 0 && place_offset + static_cast < int32_t > ( floppy::sector_size ) <= drives [ unit ].disk.bytes.count ( ) )
+			place = drives [ unit ].disk.bytes.data ( ) + place_offset;
+
+	}
+
 	bool fdc::insert ( int32_t index, const uint8_t* data, uint32_t size, bool protect ) {
 
 		if ( index < 0 || index >= drive_count || !drives [ index ].attached || !drives [ index ].disk.load ( data, size ) )
@@ -139,7 +207,7 @@ namespace machine {
 			}
 
 			cycles -= wait;
-			wait = byte_cycles;
+			wait = byte_cycles ( );
 			work ( );
 
 			if ( phase != FDC_EXECUTION || stalled )
@@ -373,7 +441,7 @@ namespace machine {
 		floppy_drive& drive = drives [ index ];
 		uint8_t target = base::min ( cylinder, static_cast < uint8_t > ( 83 ) );
 		uint32_t steps = drive.cylinder > target ? drive.cylinder - target : target - drive.cylinder;
-		uint32_t step = ( 16u - step_rate ) * 2u * millisecond;
+		uint32_t step = ( 16u - step_rate ) * 2u * millisecond / ( fast ? 8u : 1u );
 
 		if ( calibrate && !drive.attached )
 			steps = 77;
@@ -427,7 +495,7 @@ namespace machine {
 
 		task = kind;
 		phase = FDC_EXECUTION;
-		wait = settle_cycles;
+		wait = settle_cycles ( );
 		place = nullptr;
 		offset = 0;
 		terminal = false;
@@ -628,7 +696,7 @@ namespace machine {
 
 		}
 
-		wait = byte_cycles * floppy::sector_size;
+		wait = byte_cycles ( ) * floppy::sector_size;
 
 	}
 

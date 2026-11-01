@@ -1,4 +1,5 @@
 #include "storage/floppy.hh"
+#include "machine/archive.hh"
 
 namespace machine {
 
@@ -43,6 +44,48 @@ namespace machine {
 		changed = false;
 
 		return true;
+
+	}
+
+	void floppy::transfer ( archive& io ) {
+
+		uint32_t size = format ? format->size : 0;
+		bool locked = protect;
+		bool dirty = changed;
+
+		io.field ( size );
+		io.field ( locked );
+		io.field ( dirty );
+
+		if ( io.writing ( ) ) {
+
+			if ( size )
+				io.block ( bytes.data ( ), size );
+
+			return;
+
+		}
+
+		clear ( );
+
+		if ( !size )
+			return;
+
+		const floppy_format* found = identify ( size );
+
+		if ( !found ) {
+
+			io.failed = true;
+
+			return;
+
+		}
+
+		bytes.resize ( size );
+		io.block ( bytes.data ( ), size );
+		format = found;
+		protect = locked;
+		changed = dirty;
 
 	}
 

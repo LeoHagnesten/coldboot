@@ -1,4 +1,5 @@
 #include "bus/bus.hh"
+#include "machine/archive.hh"
 
 namespace machine {
 
@@ -64,6 +65,27 @@ namespace machine {
 
 			for ( uint32_t i = 0; i < page_size; i++ )
 				memory [ bases [ page ] + i ] = 0;
+
+		}
+
+	}
+
+	void bus::transfer ( archive& io ) {
+
+		io.block ( memory, memory_size );
+		io.block ( kinds, sizeof ( kinds ) );
+		io.block ( bases, sizeof ( bases ) );
+		io.field ( a20 );
+
+		for ( uint32_t page = 0; page < page_count; page++ ) {
+
+			if ( kinds [ page ] > PAGE_ROM || bases [ page ] > memory_size - page_size ) {
+
+				kinds [ page ] = PAGE_OPEN;
+				bases [ page ] = 0;
+				io.failed = true;
+
+			}
 
 		}
 

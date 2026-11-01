@@ -4,6 +4,8 @@
 
 namespace machine {
 
+	class archive;
+
 	struct floppy_format {
 
 		uint32_t size;
@@ -25,6 +27,8 @@ namespace machine {
 		bool load ( const uint8_t* data, uint32_t size );
 
 		void clear ( );
+
+		void transfer ( archive& io );
 
 		bool present ( ) const {
 

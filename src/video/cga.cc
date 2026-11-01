@@ -1,6 +1,22 @@
 #include "video/cga.hh"
+#include "machine/archive.hh"
 
 namespace machine {
+
+	void cga::transfer ( archive& io ) {
+
+		io.field ( crtc );
+		io.field ( selected );
+		io.field ( mode );
+		io.field ( color );
+		io.field ( frames );
+		io.field ( now );
+		io.field ( last_frame );
+
+		if ( !io.writing ( ) )
+			render ( );
+
+	}
 
 	static const uint8_t default_crtc [ 16 ] = { 0x71, 0x50, 0x5A, 0x0A, 0x1F, 0x06, 0x19, 0x1C, 0x02, 0x07, 0x06, 0x07, 0x00, 0x00, 0x00, 0x00 };
 

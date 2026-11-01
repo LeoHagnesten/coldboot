@@ -1,6 +1,30 @@
 #include "input/keyboard.hh"
+#include "machine/archive.hh"
 
 namespace machine {
+
+	void keyboard::transfer ( archive& io ) {
+
+		io.field ( data );
+		io.field ( full );
+		io.field ( queue );
+		io.field ( head );
+		io.field ( count );
+		io.field ( now );
+		io.field ( clock_low_since );
+		io.field ( wait );
+		io.field ( clock_high );
+		io.field ( clear_high );
+
+		if ( head >= queue_size || count > queue_size ) {
+
+			head = 0;
+			count = 0;
+			io.failed = true;
+
+		}
+
+	}
 
 	static constexpr uint32_t reset_hold = 47727;
 	static constexpr uint32_t byte_gap = 4772;

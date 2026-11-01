@@ -2,6 +2,14 @@
 
 1 ICON "coldboot.ico"
 
+101 RCDATA "layout.asm"
+102 RCDATA "post.asm"
+103 RCDATA "video.asm"
+104 RCDATA "keyboard.asm"
+105 RCDATA "disk.asm"
+106 RCDATA "services.asm"
+107 RCDATA "fixed.asm"
+
 CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "coldboot.manifest"
 
 VS_VERSION_INFO VERSIONINFO

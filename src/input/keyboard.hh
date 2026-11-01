@@ -4,6 +4,8 @@
 
 namespace machine {
 
+	class archive;
+
 	class keyboard {
 
 	public:
@@ -19,6 +21,8 @@ namespace machine {
 		void set_clock ( bool high );
 
 		void set_clear ( bool high );
+
+		void transfer ( archive& io );
 
 		uint8_t data = 0;
 		bool full = false;

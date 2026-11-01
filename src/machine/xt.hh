@@ -48,11 +48,17 @@ namespace machine {
 
 		bool load_bios ( const uint8_t* data, uint32_t size );
 
+		bool load_builtin ( char* error, int32_t error_room, int32_t* error_line );
+
 		void power_on ( );
 
 		void run ( uint64_t cycles );
 
 		int32_t take_samples ( float* out, int32_t room );
+
+		void save_state ( base::list < uint8_t >& out );
+
+		bool load_state ( const uint8_t* data, uint32_t size );
 
 		bus memory;
 		cpu core;
@@ -72,6 +78,8 @@ namespace machine {
 	private:
 
 		void advance ( uint32_t cycles );
+
+		void transfer ( archive& io );
 
 		float samples [ sample_room ] = { };
 		int32_t sample_count = 0;

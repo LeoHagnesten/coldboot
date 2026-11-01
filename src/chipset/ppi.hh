@@ -26,6 +26,8 @@ namespace machine {
 
 		void out ( uint16_t port, uint8_t value ) override;
 
+		void transfer ( archive& io );
+
 		uint8_t port_b = 0;
 		uint8_t switches = 0x2D;
 

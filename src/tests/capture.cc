@@ -1,9 +1,15 @@
 #ifdef COLDBOOT_DEBUG
 
+#include "app/dialogs.hh"
 #include "base/files.hh"
 #include "base/png.hh"
+#include "firmware/firmware.hh"
 #include "machine/xt.hh"
+#include "render/gpu.hh"
+#include "storage/blank.hh"
+#include "storage/program.hh"
 #include "tests/harness.hh"
+#include "ui/shell.hh"
 
 namespace tests {
 
@@ -269,49 +275,197 @@ namespace tests {
 
 	}
 
-	static bool save_shot ( machine::xt& board, const wchar_t* path ) {
+	static void trail ( machine::xt& board, double seconds ) {
 
-		machine::cga& video = board.video;
-		int32_t width = video.width * 2;
-		int32_t height = width * 3 / 4;
-		uint32_t* out = static_cast < uint32_t* > ( runtime_allocate ( sizeof ( uint32_t ) * static_cast < size_t > ( width ) * height ) );
+		static const int32_t depth = 64;
+		uint32_t ring [ depth ] = { };
+		uint64_t steps = 0;
+		uint64_t limit = board.core.cycles + static_cast < uint64_t > ( seconds * machine::xt::clock_rate );
+		bool derailed = false;
 
-		for ( int32_t y = 0; y < height; y++ ) {
+		while ( board.core.cycles < limit ) {
 
-			double top = static_cast < double > ( y ) * video.height / height;
-			double bottom = static_cast < double > ( y + 1 ) * video.height / height;
+			uint16_t segment = board.core.state.segments [ machine::SEG_CS ];
+			uint32_t at = board.core.instruction_address ( );
 
-			for ( int32_t x = 0; x < width; x++ ) {
+			ring [ steps++ % depth ] = static_cast < uint32_t > ( segment ) << 16 | board.core.state.ip;
 
-				double sum [ 3 ] = { };
+			if ( segment != 0xF000 && segment != 0xFFFF && !( segment == 0 && at == 0x7C00 ) ) {
 
-				for ( int32_t source = static_cast < int32_t > ( top ); source < video.height && source < bottom; source++ ) {
+				derailed = true;
 
-					double weight = base::min ( bottom, source + 1.0 ) - base::max ( top, static_cast < double > ( source ) );
-					uint32_t value = video.pixels [ source * video.width + x / 2 ];
-
-					sum [ 0 ] += weight * ( value >> 16 & 0xFF );
-					sum [ 1 ] += weight * ( value >> 8 & 0xFF );
-					sum [ 2 ] += weight * ( value & 0xFF );
-
-				}
-
-				double span = bottom - top;
-				uint32_t red = static_cast < uint32_t > ( sum [ 0 ] / span + 0.5 );
-				uint32_t green = static_cast < uint32_t > ( sum [ 1 ] / span + 0.5 );
-				uint32_t blue = static_cast < uint32_t > ( sum [ 2 ] / span + 0.5 );
-
-				out [ y * width + x ] = base::min ( red, 255u ) << 16 | base::min ( green, 255u ) << 8 | base::min ( blue, 255u );
+				break;
 
 			}
 
+			board.run ( 1 );
+
 		}
 
-		bool saved = png::save ( path, out, width, height );
+		char head [ 48 ] = "\r\ntrail: ";
 
-		runtime_release ( out );
+		append ( head, 48, derailed ? "derailed\r\n" : "ran clean\r\n" );
+		print ( head );
+
+		for ( uint64_t i = steps > depth ? steps - depth : 0; i < steps; i++ ) {
+
+			char line [ 64 ] = { };
+			uint32_t entry = ring [ i % depth ];
+			uint32_t linear = machine::cpu::linear ( static_cast < uint16_t > ( entry >> 16 ), static_cast < uint16_t > ( entry ) );
+
+			append_hex ( line, 64, entry >> 16, 4 );
+			append ( line, 64, ":" );
+			append_hex ( line, 64, entry & 0xFFFF, 4 );
+			append ( line, 64, "  " );
+
+			for ( uint32_t b = 0; b < 5; b++ ) {
+
+				append_hex ( line, 64, board.memory.read8 ( linear + b ), 2 );
+				append ( line, 64, " " );
+
+			}
+
+			append ( line, 64, "\r\n" );
+			print ( line );
+
+		}
+
+	}
+
+	static bool save_shot ( machine::xt& board, const wchar_t* path ) {
+
+		return app::save_screenshot ( board.video.pixels, board.video.width, board.video.height, path );
+
+	}
+
+	struct interface_options {
+
+		bool light = false;
+		bool crt = false;
+		bool turbo = false;
+		bool captured = false;
+		bool off = false;
+		bool post = false;
+		bool fast = false;
+		ui::popover_kind panel = ui::POPOVER_NONE;
+		int32_t width = 1040;
+		int32_t height = 860;
+		float scale = 1.0f;
+		ui::control hover = ui::CONTROL_NONE;
+		wchar_t toast [ 96 ] = { };
+
+	};
+
+	static bool save_interface ( machine::xt& board, const interface_options& options, wchar_t names [ 2 ] [ MAX_PATH ], const wchar_t* path ) {
+
+		render::gpu* gpu = new render::gpu ( );
+		ui::shell* shell = new ui::shell ( );
+		int32_t pixel_width = static_cast < int32_t > ( options.width * options.scale );
+		int32_t pixel_height = static_cast < int32_t > ( options.height * options.scale );
+		bool saved = false;
+
+		if ( gpu->create ( nullptr, pixel_width, pixel_height ) ) {
+
+			ui::view state;
+
+			gpu->set_dpi ( 96.0f * options.scale );
+			shell->layout ( static_cast < float > ( options.width ), static_cast < float > ( options.height ), false );
+			state.pixels = options.off ? nullptr : board.video.pixels;
+			state.frame_width = board.video.width;
+			state.frame_height = board.video.height;
+			state.powered = !options.off;
+			state.turbo = options.turbo;
+			state.crt = options.crt;
+			state.light = options.light;
+			state.fast_floppy = options.fast;
+			state.captured = options.captured;
+			state.can_load = true;
+			state.post_code = options.post ? board.pages.post_code : 0;
+			state.speed = options.turbo ? 38.4 : 4.77;
+			state.memory = board.memory_kilobytes;
+			state.bios_name = L"Coldboot BIOS";
+
+			for ( int32_t d = 0; d < 2; d++ ) {
+
+				const machine::floppy& disk = board.floppy.drives [ d ].disk;
+
+				state.drives [ d ].name = names [ d ];
+				state.drives [ d ].present = disk.present ( );
+				state.drives [ d ].kilobytes = disk.present ( ) ? disk.format->size / 1024 : 0;
+				state.drives [ d ].protect = disk.protect;
+				state.drives [ d ].light = board.floppy.spinning ( d );
+				state.drives [ d ].program = disk.present ( ) && machine::is_program_path ( names [ d ] );
+
+			}
+
+			double now = 10.0;
+
+			for ( int32_t i = 0; i < 4; i++ ) {
+
+				shell->paint ( *gpu, state, now );
+				gpu->end ( );
+				now += 0.05;
+
+			}
+
+			if ( options.panel != ui::POPOVER_NONE )
+				shell->open_popover ( options.panel, now );
+
+			if ( options.hover != ui::CONTROL_NONE ) {
+
+				render::rect area = shell->anchor_of ( options.hover );
+
+				shell->mouse_move ( area.x + area.w * 0.5f, area.y + area.h * 0.5f, now );
+
+			}
+
+			if ( options.toast [ 0 ] )
+				shell->toast ( options.toast, now - 0.6 );
+
+			for ( int32_t i = 0; i < 40; i++ ) {
+
+				shell->paint ( *gpu, state, now );
+				gpu->end ( );
+				now += 0.05;
+
+			}
+
+			saved = gpu->save ( path );
+
+		}
+
+		delete shell;
+		delete gpu;
 
 		return saved;
+
+	}
+
+	static ui::control control_named ( const wchar_t* name ) {
+
+		struct entry {
+
+			const wchar_t* name;
+			ui::control id;
+
+		};
+
+		static const entry entries [ ] = {
+
+			{ L"power", ui::CONTROL_POWER }, { L"reset", ui::CONTROL_RESET }, { L"pause", ui::CONTROL_PAUSE }, { L"save", ui::CONTROL_SAVE },
+			{ L"load", ui::CONTROL_LOAD }, { L"shot", ui::CONTROL_SHOT }, { L"speed", ui::CONTROL_SPEED }, { L"disks", ui::CONTROL_DISKS },
+			{ L"settings", ui::CONTROL_SETTINGS }, { L"fullscreen", ui::CONTROL_FULLSCREEN },
+
+		};
+
+		for ( const entry& item : entries ) {
+
+			if ( base::same_text ( item.name, name ) )
+				return item.id;
+
+		}
+
+		return ui::CONTROL_NONE;
 
 	}
 
@@ -319,6 +473,11 @@ namespace tests {
 
 		machine::xt* board = new machine::xt ( );
 		int32_t problems = 0;
+		interface_options look;
+		static wchar_t names [ 2 ] [ MAX_PATH ];
+
+		names [ 0 ] [ 0 ] = 0;
+		names [ 1 ] [ 0 ] = 0;
 
 		for ( int32_t i = 1; i < count; i++ ) {
 
@@ -326,7 +485,46 @@ namespace tests {
 			const wchar_t* value = i + 1 < count ? arguments [ i + 1 ] : L"";
 			base::list < char > data;
 
-			if ( base::same_text ( option, L"--bios" ) ) {
+			if ( base::same_text ( option, L"--asm" ) ) {
+
+				base::list < uint8_t > rom;
+				char message [ 200 ] = { };
+				char result [ 260 ] = "asm: ";
+
+				if ( firmware::build ( rom, message, sizeof ( message ), nullptr ) ) {
+
+					append ( result, 260, "ok, " );
+					append_number ( result, 260, rom.count ( ) );
+					append ( result, 260, " bytes\r\n" );
+
+				} else {
+
+					append ( result, 260, message );
+					append ( result, 260, "\r\n" );
+					problems++;
+
+				}
+
+				print ( result );
+
+			} else if ( base::same_text ( option, L"--own" ) ) {
+
+				char message [ 200 ] = { };
+
+				if ( !board->load_builtin ( message, sizeof ( message ), nullptr ) ) {
+
+					char report [ 260 ] = "capture: ";
+
+					append ( report, 260, message );
+					append ( report, 260, "\r\n" );
+					print ( report );
+					problems++;
+
+				}
+
+				board->power_on ( );
+
+			} else if ( base::same_text ( option, L"--bios" ) ) {
 
 				i++;
 
@@ -343,10 +541,61 @@ namespace tests {
 
 				i++;
 
-				if ( !files::read ( value, data ) || !board->floppy.insert ( option [ 2 ] == L'a' ? 0 : 1, reinterpret_cast < const uint8_t* > ( data.data ( ) ), static_cast < uint32_t > ( data.count ( ) - 1 ), false ) ) {
+				int32_t drive = option [ 2 ] == L'a' ? 0 : 1;
+				base::list < uint8_t > built;
+				bool ready = files::read ( value, data );
+				const uint8_t* image = reinterpret_cast < const uint8_t* > ( data.data ( ) );
+				uint32_t size = ready ? static_cast < uint32_t > ( data.count ( ) - 1 ) : 0;
+
+				if ( ready && machine::is_program_path ( value ) ) {
+
+					char report [ 220 ] = "asm: ";
+					char message [ 160 ] = { };
+					uint32_t used = 0;
+
+					ready = machine::make_program_disk ( data.data ( ), static_cast < int32_t > ( size ), built, used, message, sizeof ( message ) );
+
+					if ( ready ) {
+
+						append ( report, 220, "ok, " );
+						append_number ( report, 220, used );
+						append ( report, 220, " bytes\r\n" );
+						image = built.data ( );
+						size = static_cast < uint32_t > ( built.count ( ) );
+
+					} else {
+
+						append ( report, 220, message );
+						append ( report, 220, "\r\n" );
+
+					}
+
+					print ( report );
+
+				}
+
+				if ( !ready || !board->floppy.insert ( drive, image, size, false ) ) {
 
 					print ( "capture: couldn't insert the disk\r\n" );
 					problems++;
+
+				} else {
+
+					const wchar_t* tail = value;
+
+					for ( const wchar_t* at = value; *at; at++ ) {
+
+						if ( *at == L'\\' || *at == L'/' )
+							tail = at + 1;
+
+					}
+
+					int32_t length = 0;
+
+					for ( ; tail [ length ] && length < MAX_PATH - 1; length++ )
+						names [ drive ] [ length ] = tail [ length ];
+
+					names [ drive ] [ length ] = 0;
 
 				}
 
@@ -374,14 +623,98 @@ namespace tests {
 				i++;
 				hunt ( *board, parse_seconds ( value ) );
 
-			}
-			else if ( base::same_text ( option, L"--shot" ) ) {
+			} else if ( base::same_text ( option, L"--trail" ) ) {
+
+				i++;
+				trail ( *board, parse_seconds ( value ) );
+
+			} else if ( base::same_text ( option, L"--shot" ) ) {
 
 				i++;
 
 				if ( !save_shot ( *board, value ) ) {
 
 					print ( "capture: couldn't write the screenshot\r\n" );
+					problems++;
+
+				}
+
+			} else if ( base::same_text ( option, L"--blank" ) && i + 2 < count ) {
+
+				base::list < uint8_t > image;
+				uint32_t size = static_cast < uint32_t > ( parse_seconds ( arguments [ i + 1 ] ) );
+
+				if ( !machine::make_blank_disk ( size, 0x1234ABCD, image ) || !files::write ( arguments [ i + 2 ], reinterpret_cast < const char* > ( image.data ( ) ), image.count ( ) ) ) {
+
+					print ( "capture: couldn't make the blank disk\r\n" );
+					problems++;
+
+				}
+
+				i += 2;
+
+			} else if ( base::same_text ( option, L"--fast" ) ) {
+
+				board->floppy.fast = true;
+				look.fast = true;
+
+			} else if ( base::same_text ( option, L"--ui-light" ) )
+				look.light = true;
+			else if ( base::same_text ( option, L"--ui-dark" ) )
+				look.light = false;
+			else if ( base::same_text ( option, L"--ui-crt" ) )
+				look.crt = true;
+			else if ( base::same_text ( option, L"--ui-sharp" ) )
+				look.crt = false;
+			else if ( base::same_text ( option, L"--ui-turbo" ) )
+				look.turbo = true;
+			else if ( base::same_text ( option, L"--ui-captured" ) )
+				look.captured = true;
+			else if ( base::same_text ( option, L"--ui-off" ) )
+				look.off = true;
+			else if ( base::same_text ( option, L"--ui-post" ) )
+				look.post = true;
+			else if ( base::same_text ( option, L"--ui-reset" ) )
+				look = interface_options ( );
+			else if ( base::same_text ( option, L"--ui-panel" ) ) {
+
+				i++;
+				look.panel = base::same_text ( value, L"disks" ) ? ui::POPOVER_DISKS : ( base::same_text ( value, L"settings" ) ? ui::POPOVER_SETTINGS : ui::POPOVER_NONE );
+
+			} else if ( base::same_text ( option, L"--ui-hover" ) ) {
+
+				i++;
+				look.hover = control_named ( value );
+
+			} else if ( base::same_text ( option, L"--ui-scale" ) ) {
+
+				i++;
+				look.scale = static_cast < float > ( parse_seconds ( value ) );
+
+			} else if ( base::same_text ( option, L"--ui-size" ) && i + 2 < count ) {
+
+				look.width = static_cast < int32_t > ( parse_seconds ( arguments [ i + 1 ] ) );
+				look.height = static_cast < int32_t > ( parse_seconds ( arguments [ i + 2 ] ) );
+				i += 2;
+
+			} else if ( base::same_text ( option, L"--ui-toast" ) ) {
+
+				i++;
+
+				int32_t length = 0;
+
+				for ( ; value [ length ] && length < 95; length++ )
+					look.toast [ length ] = value [ length ];
+
+				look.toast [ length ] = 0;
+
+			} else if ( base::same_text ( option, L"--ui" ) ) {
+
+				i++;
+
+				if ( !save_interface ( *board, look, names, value ) ) {
+
+					print ( "capture: couldn't render the interface\r\n" );
 					problems++;
 
 				}

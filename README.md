@@ -1,37 +1,47 @@
-<img src="docs/logo.png" width="96" align="right" alt="Coldboot logo">
+<p align="center">
+  <img src="docs/logo.png" width="104" alt="Coldboot logo">
+</p>
 
-# Coldboot
+<h1 align="center">Coldboot</h1>
 
-x86 PC emulator for Windows. The CPU, chipset and BIOS are all written from scratch, and nothing links against the C runtime.
+<p align="center">
+  IBM PC/XT emulator for Windows. The 8088, the chipset, the floppy controller, the BIOS and the assembler that builds the BIOS are all written from scratch, and nothing links against the C runtime.
+</p>
 
-Right now it's an IBM PC/XT: an 8088 at 4.77 MHz, 640 KB of RAM, CGA, the keyboard, the PC speaker and two floppy drives. It boots FreeDOS from a floppy image. Coldboot's own BIOS is next, so until then you drop in a BIOS ROM to power the machine on.
+![Coldboot running the FreeDOS 1.3 installer](docs/app.png)
 
-![GLaBIOS running its power-on self-test](docs/post.png)
+## What's in it
 
-![FreeDOS 1.3 booting from a 720 KB floppy](docs/menu.png)
+Coldboot powers on into its own BIOS, which it assembles from source every time the machine starts. Drop a floppy image on the window and it boots. FreeDOS 1.3 runs on it, installer and all.
 
-![The FreeDOS prompt after ver and dir](docs/prompt.png)
+- **8088.** Every opcode, including the undocumented ones. Passes all 3,007,000 cases in [SingleStepTests 8088](https://github.com/SingleStepTests/8088), undefined flags included, and counts clocks with a prefetch queue model.
+- **Board.** 8259, 8253, 8237 with DRAM refresh, 8255 with the configuration switches, the XT keyboard, the PC speaker, and CGA in all of its text and graphics modes.
+- **Floppies.** An NEC 765 on DMA channel 2 and IRQ 6 with two drives and images from 160 KB to 1.44 MB. Writes go back to the image file when the drive motor stops.
+- **BIOS.** About 3,100 lines of 8086 assembly in [`src/firmware`](src/firmware). POST with a memory count you can watch, a boot menu, INT 10h video for every CGA mode, the keyboard with every shift and lock key, INT 13h with media detection, the timer, and the IBM entry points at their fixed addresses.
+- **Assembler.** A two-pass 8086 assembler with labels, local labels, `equ`, `org`, `times`, `incbin` and automatic short and near jumps. It builds the BIOS, the boot sector of every blank disk Coldboot makes, and any program you drop on the window.
+- **Boot your own code.** Drop an `.asm` file on the window and Coldboot assembles it onto a 360 KB disk and reboots into it. Save the file and it rebuilds and reboots again, or shows the line it broke on and keeps the old build running. [`demos/mandelbrot.asm`](demos/mandelbrot.asm) draws the Mandelbrot set in CGA with 4.12 fixed point math in a single 512 byte boot sector, and takes about a minute at 4.77 MHz.
+- **Save states.** The whole machine, disks included, in one file.
+- **Display.** Direct3D 11 with sharp scaling to 4:3, or a CRT mode with curvature, scanlines and a phosphor mask. The interface is drawn with Direct2D and DirectWrite.
 
-## Running it
+| | |
+|---|---|
+| ![Coldboot BIOS POST screen](docs/bios.png) | ![Coldboot BIOS boot menu](docs/menu.png) |
+| ![Floppy drive panel](docs/drives.png) | ![Settings in the light theme](docs/settings.png) |
 
-Drop a BIOS ROM of 64 KB or less onto the window and the machine powers on. Coldboot remembers the ROM for next time. Drop a floppy image to put it in drive A, or hold Shift to put it in drive B. Any image from 160 KB to 1.44 MB works. When the guest writes to a disk, Coldboot saves the changes back to the image file once the drive motor stops. If the image file is read-only, the disk is write-protected.
+![The Mandelbrot demo in CRT mode](docs/crt.png)
 
-Files can also go on the command line, ROM and disks in any order:
+## Using it
 
-```
-Coldboot.exe GLABIOS_0.4.2_8X.ROM x86BOOT.img
-```
+- Coldboot starts powered on. Drop a floppy image anywhere on the window to put it in drive A, or hold Shift for drive B.
+- Drop an `.asm` file the same way to boot it. Programs start at `org 0x7C00`, and anything that fits in one sector gets its boot signature added for you. A key press in the Mandelbrot demo cycles the CGA palettes.
+- Press Esc while POST shows the hint to pick the boot drive.
+- Click the screen to capture the keyboard, so Alt+Tab and the Windows key stay inside. Right Ctrl lets go.
+- F11 is fullscreen, F12 saves a screenshot to `Pictures\Coldboot`, and Pause stops the clock.
+- The pill next to the floppy button switches between a real 4.77 MHz and turbo, which runs as fast as your CPU allows.
+- The floppy panel inserts, ejects and write-protects disks, and makes blank FAT12 disks from 360 KB to 1.44 MB.
+- Settings cover speed, sharp or CRT display, dark or light theme, real or fast floppy timing, memory size, and Coldboot's BIOS or a ROM of your own.
 
-To try it out, get [GLaBIOS](https://github.com/640-KB/GLaBIOS/releases) (the `8X` build) and the [FreeDOS 1.3 Floppy Edition](https://www.freedos.org/download/), then use `x86BOOT.img` from the `720k` folder. The FreeDOS 1.2 install floppy won't work: its COMMAND.COM uses 80186 instructions, so it crashes on a real 8088 too.
-
-## Hardware
-
-- **8088.** Runs every opcode, including the undocumented ones, and passes all 3,007,000 cases in the [SingleStepTests 8088](https://github.com/SingleStepTests/8088) suite, including the flags Intel calls undefined. Handles hardware interrupts, NMI, `hlt` and the trap flag, and counts clocks with a prefetch queue model.
-- **Motherboard.** 8259 interrupt controller, 8253 timer, 8237 DMA with page registers and DRAM refresh, and 8255 with the configuration switches.
-- **Keyboard.** The XT keyboard, including its reset handshake.
-- **Sound.** The PC speaker, played through WASAPI.
-- **CGA.** 40 and 80 column text, 320x200 and 640x200 graphics, and a code page 437 font drawn for Coldboot.
-- **Floppy.** NEC 765 controller on DMA channel 2 and IRQ 6. Seek, recalibrate, read, write, format, read ID, multi-track transfers and write protection, at the real drive's data rate.
+To try it, get the [FreeDOS 1.3 Floppy Edition](https://www.freedos.org/download/) and drop `x86BOOT.img` from the `720k` folder on the window.
 
 ## Building
 
@@ -41,32 +51,28 @@ Needs Visual Studio 2022 with the C++ desktop workload and the Clang tools. Open
 msbuild coldboot.sln -p:Configuration=Release -p:Platform=x64
 ```
 
-Everything ends up in `build\release`.
+The exe ends up in `build\release`.
 
 ## Testing
 
-Debug builds have three extra modes:
+Debug builds have extra modes, and none of them show a window.
 
 ```
 Coldboot.exe --test
 Coldboot.exe --cpu <folder with the 8088 v2 .json.gz files>
-Coldboot.exe --bios <rom> [--a <image>] [--b <image>] <steps>
+Coldboot.exe --own [--a <image>] [--b <image>] <steps>
+Coldboot.exe --smoke <folder> [<image>]
 ```
 
-`--test` checks the CPU, every chip, the floppy controller and a full boot from a generated disk. `--cpu` also takes `--only <prefix>` to run some opcodes, `--exact` to check undefined flags too, and `--timing` to compare clock counts with the hardware recordings.
+- `--test` runs 104 checks across the CPU, the chips, the floppy controller, the assembler, disk images, the BIOS and save states.
+- `--cpu` runs SingleStepTests. It also takes `--only <prefix>`, `--exact` and `--timing`.
+- `--own` boots the built-in BIOS and works through the steps in order. `--a` and `--b` take `.asm` files too:
+  - `--run <seconds>` runs emulated time
+  - `--type <text>` types on the keyboard, where `\n` is Enter, and `--key <hex>` presses one scan code
+  - `--print` writes the text screen to the console and `--shot <png>` saves it as an image
+  - `--ui <png>` renders the whole app offscreen, with `--ui-light`, `--ui-crt` and `--ui-panel disks` or `settings` to pick the look
+  - `--where`, `--hunt` and `--trail` show where the CPU is and catch it running into empty memory
+  - `--asm` assembles the BIOS and reports errors as `file.asm:line`
+- `--smoke` starts the real app in a hidden window with the sound off and your settings left alone. It boots, opens the floppy panel, saves and loads a state, and writes screenshots from the swap chain plus a short report into the folder.
 
-The third mode runs the machine without a window and works through the steps in order:
-
-- `--run <seconds>`: run the machine for that much emulated time
-- `--type <text>`: type on the keyboard, where `\n` is Enter
-- `--key <scan code>`: press a single key by its hex scan code
-- `--print`: write the text screen to the console
-- `--shot <file.png>`: save the screen as a 4:3 PNG
-- `--where`: print where the CPU is, plus the interrupt controller and floppy controller state
-- `--hunt <seconds>`: single-step until execution leaves RAM and ROM, then print the last 48 instructions
-
-The FreeDOS prompt screenshot above came from:
-
-```
-Coldboot.exe --bios GLABIOS_0.4.2_8X.ROM --a x86BOOT.img --run 150 --type "n\n" --run 60 --type "cls\n" --run 4 --type "ver\n" --run 4 --type "dir\n" --run 25 --shot prompt.png
-```
+Every screenshot here came from `--own` and `--ui`.

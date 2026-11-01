@@ -45,8 +45,18 @@ namespace machine {
 
 		static constexpr int32_t drive_count = 4;
 		static constexpr uint32_t millisecond = 4773;
-		static constexpr uint32_t byte_cycles = 153;
-		static constexpr uint32_t settle_cycles = millisecond * 2;
+
+		uint32_t byte_cycles ( ) const {
+
+			return fast ? 12 : 153;
+
+		}
+
+		uint32_t settle_cycles ( ) const {
+
+			return fast ? millisecond / 8 : millisecond * 2;
+
+		}
 
 		fdc ( dma& transfers, bus& memory );
 
@@ -74,10 +84,13 @@ namespace machine {
 
 		void out ( uint16_t port, uint8_t value ) override;
 
+		void transfer ( archive& io );
+
 		floppy_drive drives [ drive_count ];
 		uint8_t output = 0;
 		uint8_t step_rate = 0x0C;
 		fdc_phase phase = FDC_COMMAND;
+		bool fast = false;
 
 	private:
 
