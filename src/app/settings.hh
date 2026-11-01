@@ -26,6 +26,11 @@ namespace app {
 		int32_t window_y = 0;
 		int32_t window_width = 0;
 		int32_t window_height = 0;
+		int32_t manager_x = 0;
+		int32_t manager_y = 0;
+		int32_t manager_width = 0;
+		int32_t manager_height = 0;
+		bool manager_maximized = false;
 		wchar_t bios [ MAX_PATH ] = { };
 		wchar_t disks [ 2 ] [ MAX_PATH ] = { };
 

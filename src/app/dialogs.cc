@@ -22,8 +22,14 @@ namespace app {
 		static const COMDLG_FILTERSPEC sources [ ] = { { L"Floppy images and programs", L"*.img;*.ima;*.vfd;*.dsk;*.flp;*.asm" }, { L"All files", L"*.*" } };
 		static const COMDLG_FILTERSPEC roms [ ] = { { L"BIOS images", L"*.rom;*.bin" }, { L"All files", L"*.*" } };
 		static const COMDLG_FILTERSPEC states [ ] = { { L"Coldboot states", L"*.state" }, { L"All files", L"*.*" } };
+		static const COMDLG_FILTERSPEC machines [ ] = { { L"Coldboot machines", L"*.coldboot" }, { L"All files", L"*.*" } };
 
-		if ( kind == FILE_DISK ) {
+		if ( kind == FILE_MACHINE ) {
+
+			dialog->SetFileTypes ( 2, machines );
+			dialog->SetDefaultExtension ( L"coldboot" );
+
+		} else if ( kind == FILE_DISK ) {
 
 			dialog->SetFileTypes ( 2, opening ? sources : disks );
 			dialog->SetDefaultExtension ( L"img" );
@@ -69,7 +75,7 @@ namespace app {
 			return false;
 
 		apply_filter ( dialog, kind, true );
-		dialog->SetTitle ( kind == FILE_DISK ? L"Insert a floppy image" : ( kind == FILE_ROM ? L"Choose a BIOS ROM" : L"Load a state" ) );
+		dialog->SetTitle ( kind == FILE_DISK ? L"Insert a floppy image" : ( kind == FILE_ROM ? L"Choose a BIOS ROM" : ( kind == FILE_MACHINE ? L"Add a Coldboot machine" : L"Load a state" ) ) );
 
 		bool ok = SUCCEEDED ( dialog->Show ( owner ) ) && take_result ( dialog, out );
 

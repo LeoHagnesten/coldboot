@@ -9,7 +9,9 @@
 #include "storage/blank.hh"
 #include "storage/program.hh"
 #include "tests/harness.hh"
+#include "ui/manager.hh"
 #include "ui/shell.hh"
+#include "vm/config.hh"
 
 namespace tests {
 
@@ -442,6 +444,121 @@ namespace tests {
 
 	}
 
+	static bool save_manager ( machine::xt& board, const interface_options& options, int32_t sheet, bool empty, const wchar_t* path ) {
+
+		static const wchar_t* const home = L"C:\\Users\\you\\Documents\\Coldboot VMs";
+		render::gpu* gpu = new render::gpu ( );
+		ui::manager* view = new ui::manager ( );
+		int32_t view_width = options.width == 1040 ? 1180 : options.width;
+		int32_t view_height = options.height == 860 ? 760 : options.height;
+		bool saved = false;
+		ui::machine_card cards [ 4 ];
+		ui::preset_card choices [ 8 ];
+		int32_t choice_count = 0;
+		const vm::preset* table = vm::presets ( choice_count );
+
+		cards [ 0 ].name = L"FreeDOS 1.3";
+		cards [ 0 ].mark = L"FD";
+		cards [ 0 ].running = true;
+		cards [ 0 ].floppies [ 0 ] = L"C:\\Disks\\x86BOOT_720.img";
+		cards [ 0 ].floppies [ 1 ] = L"C:\\Disks\\Work disk.img";
+		cards [ 0 ].folder = L"C:\\Users\\you\\Documents\\Coldboot VMs\\FreeDOS 1.3";
+		cards [ 0 ].notes = L"Installer works, keep the work disk in B";
+		cards [ 0 ].preview = board.video.width > 0 ? board.video.pixels : nullptr;
+		cards [ 0 ].preview_width = board.video.width;
+		cards [ 0 ].preview_height = board.video.height;
+		cards [ 1 ].name = L"Mandelbrot";
+		cards [ 1 ].floppies [ 0 ] = L"C:\\code\\coldboot\\demos\\mandelbrot.asm";
+		cards [ 1 ].folder = L"C:\\Users\\you\\Documents\\Coldboot VMs\\Mandelbrot";
+		cards [ 2 ].name = L"Turbo XT";
+		cards [ 2 ].memory = 512;
+		cards [ 2 ].folder = L"C:\\Users\\you\\Documents\\Coldboot VMs\\Turbo XT";
+		cards [ 3 ].name = L"Old copy";
+		cards [ 3 ].problem = L"line 3: memory has to be 64 to 640 KB in steps of 16";
+		cards [ 3 ].folder = L"D:\\Backups\\Old copy\\Old copy.coldboot";
+
+		for ( int32_t i = 0; i < choice_count && i < 8; i++ ) {
+
+			choices [ i ].label = table [ i ].label;
+			choices [ i ].detail = table [ i ].detail;
+			choices [ i ].mark = table [ i ].mark;
+
+		}
+
+		if ( gpu->create ( nullptr, static_cast < int32_t > ( view_width * options.scale ), static_cast < int32_t > ( view_height * options.scale ) ) ) {
+
+			ui::manager_view state;
+			double now = 10.0;
+
+			gpu->set_dpi ( 96.0f * options.scale );
+			view->layout ( static_cast < float > ( view_width ), static_cast < float > ( view_height ) );
+			state.light = options.light;
+			state.machines = cards;
+			state.count = empty ? 0 : 4;
+			state.selected = sheet == 2 ? 1 : 0;
+			state.presets = choices;
+			state.preset_count = choice_count;
+			state.location = home;
+
+			if ( sheet == 1 ) {
+
+				view->form.name.set ( L"DOS games" );
+				view->form.preset = 1;
+				view->open_sheet ( ui::SHEET_NEW, now );
+
+			} else if ( sheet == 2 ) {
+
+				view->form.name.set ( L"Mandelbrot" );
+				view->form.floppies [ 0 ] [ 0 ] = 0;
+
+				const wchar_t* demo = cards [ 1 ].floppies [ 0 ];
+
+				for ( int32_t i = 0; demo [ i ] && i < ui::path_room - 1; i++ ) {
+
+					view->form.floppies [ 0 ] [ i ] = demo [ i ];
+					view->form.floppies [ 0 ] [ i + 1 ] = 0;
+
+				}
+
+				view->open_sheet ( ui::SHEET_SETTINGS, now );
+
+			} else if ( sheet == 3 ) {
+
+				const wchar_t* name = L"Turbo XT";
+
+				for ( int32_t i = 0; name [ i ]; i++ ) {
+
+					view->subject [ i ] = name [ i ];
+					view->subject [ i + 1 ] = 0;
+
+				}
+
+				view->open_sheet ( ui::SHEET_REMOVE, now );
+
+			}
+
+			if ( options.toast [ 0 ] )
+				view->toast ( options.toast, now + 1.4 );
+
+			for ( int32_t i = 0; i < 40; i++ ) {
+
+				view->paint ( *gpu, state, now );
+				gpu->end ( );
+				now += 0.05;
+
+			}
+
+			saved = gpu->save ( path );
+
+		}
+
+		delete view;
+		delete gpu;
+
+		return saved;
+
+	}
+
 	static ui::control control_named ( const wchar_t* name ) {
 
 		struct entry {
@@ -475,6 +592,8 @@ namespace tests {
 		machine::xt* board = new machine::xt ( );
 		int32_t problems = 0;
 		interface_options look;
+		int32_t manager_sheet = 0;
+		bool manager_empty = false;
 		static wchar_t names [ 2 ] [ MAX_PATH ];
 
 		names [ 0 ] [ 0 ] = 0;
@@ -708,6 +827,27 @@ namespace tests {
 					look.toast [ length ] = value [ length ];
 
 				look.toast [ length ] = 0;
+
+			} else if ( base::same_text ( option, L"--manager-sheet" ) ) {
+
+				i++;
+				manager_sheet = base::same_text ( value, L"new" ) ? 1 : ( base::same_text ( value, L"settings" ) ? 2 : ( base::same_text ( value, L"remove" ) ? 3 : 0 ) );
+
+			} else if ( base::same_text ( option, L"--manager-empty" ) )
+				manager_empty = true;
+			else if ( base::same_text ( option, L"--manager" ) ) {
+
+				i++;
+
+				if ( !save_manager ( *board, look, manager_sheet, manager_empty, value ) ) {
+
+					print ( "capture: couldn't render the manager\r\n" );
+					problems++;
+
+				}
+
+				manager_sheet = 0;
+				manager_empty = false;
 
 			} else if ( base::same_text ( option, L"--ui" ) ) {
 

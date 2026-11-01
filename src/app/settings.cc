@@ -121,6 +121,16 @@ namespace app {
 					out.window_width = number ( value, size );
 				else if ( key_is ( line, length, "window_height" ) )
 					out.window_height = number ( value, size );
+				else if ( key_is ( line, length, "manager_x" ) )
+					out.manager_x = number ( value, size );
+				else if ( key_is ( line, length, "manager_y" ) )
+					out.manager_y = number ( value, size );
+				else if ( key_is ( line, length, "manager_width" ) )
+					out.manager_width = number ( value, size );
+				else if ( key_is ( line, length, "manager_height" ) )
+					out.manager_height = number ( value, size );
+				else if ( key_is ( line, length, "manager_maximized" ) )
+					out.manager_maximized = number ( value, size ) != 0;
 				else if ( key_is ( line, length, "bios" ) )
 					path_value ( value, size, out.bios );
 				else if ( key_is ( line, length, "disk_a" ) )
@@ -200,6 +210,11 @@ namespace app {
 		put_number ( out, "window_y", in.window_y );
 		put_number ( out, "window_width", in.window_width );
 		put_number ( out, "window_height", in.window_height );
+		put_number ( out, "manager_x", in.manager_x );
+		put_number ( out, "manager_y", in.manager_y );
+		put_number ( out, "manager_width", in.manager_width );
+		put_number ( out, "manager_height", in.manager_height );
+		put_number ( out, "manager_maximized", in.manager_maximized );
 		put_path ( out, "bios", in.bios );
 		put_path ( out, "disk_a", in.disks [ 0 ] );
 		put_path ( out, "disk_b", in.disks [ 1 ] );

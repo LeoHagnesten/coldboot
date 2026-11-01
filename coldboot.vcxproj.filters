@@ -58,6 +58,9 @@
     <Filter Include="src\video">
       <UniqueIdentifier>{B9D82AB6-32D0-5976-86D6-99A92FA54EF4}</UniqueIdentifier>
     </Filter>
+    <Filter Include="src\vm">
+      <UniqueIdentifier>{5E1B7C93-2A64-5D80-9F3E-B47A16C0D258}</UniqueIdentifier>
+    </Filter>
     <Filter Include="assets">
       <UniqueIdentifier>{E2C5A817-49D3-5B6E-8F20-A7C1D3E5B984}</UniqueIdentifier>
     </Filter>
@@ -80,6 +83,7 @@
     <ClCompile Include="src\tests\*.cc"><Filter>src\tests</Filter></ClCompile>
     <ClCompile Include="src\ui\*.cc"><Filter>src\ui</Filter></ClCompile>
     <ClCompile Include="src\video\*.cc"><Filter>src\video</Filter></ClCompile>
+    <ClCompile Include="src\vm\*.cc"><Filter>src\vm</Filter></ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\app\*.hh"><Filter>src\app</Filter></ClInclude>
@@ -99,6 +103,7 @@
     <ClInclude Include="src\tests\*.hh"><Filter>src\tests</Filter></ClInclude>
     <ClInclude Include="src\ui\*.hh"><Filter>src\ui</Filter></ClInclude>
     <ClInclude Include="src\video\*.hh"><Filter>src\video</Filter></ClInclude>
+    <ClInclude Include="src\vm\*.hh"><Filter>src\vm</Filter></ClInclude>
   </ItemGroup>
   <ItemGroup>
     <FxCompile Include="src\render\shaders\*.hlsl"><Filter>src\render\shaders</Filter></FxCompile>

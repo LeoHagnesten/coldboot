@@ -28,6 +28,8 @@ namespace tests {
 
 	void emulator_tests ( );
 
+	void machine_file_tests ( );
+
 	void hypervisor_tests ( );
 
 	int32_t foundation_tests ( );

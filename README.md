@@ -23,6 +23,8 @@ Coldboot powers on into its own BIOS, which it assembles from source every time 
 - **Save states.** The whole machine, disks included, in one file.
 - **Display.** Direct3D 11 with sharp scaling to 4:3, or a CRT mode with curvature, scanlines and a phosphor mask. The interface is drawn with Direct2D and DirectWrite.
 
+![The machine manager](docs/manager.png)
+
 | | |
 |---|---|
 | ![Coldboot BIOS POST screen](docs/bios.png) | ![Coldboot BIOS boot menu](docs/menu.png) |
@@ -32,7 +34,10 @@ Coldboot powers on into its own BIOS, which it assembles from source every time 
 
 ## Using it
 
-- Coldboot starts powered on. Drop a floppy image anywhere on the window to put it in drive A, or hold Shift for drive B.
+- Coldboot opens on its machine list. **New** makes a machine in `Documents\Coldboot VMs`, each in its own folder with a `.coldboot` file you can copy, back up or add on another PC with **Add an existing machine**.
+- **Start** (or a double click) opens the machine in its own window and process, so a crash in one machine never takes down the list or the others. The list shows which machines are running, and the last screen of each one after it closes.
+- **Settings** changes the name, memory, floppies and BIOS while a machine is off. **Remove** either forgets a machine or moves its folder to the Recycle Bin.
+- A machine window starts powered on. Drop a floppy image anywhere on it to put it in drive A, or hold Shift for drive B.
 - Drop an `.asm` file the same way to boot it. Programs start at `org 0x7C00`, and anything that fits in one sector gets its boot signature added for you. A key press in the Mandelbrot demo cycles the CGA palettes.
 - Press Esc while POST shows the hint to pick the boot drive.
 - Click the screen to capture the keyboard, so Alt+Tab and the Windows key stay inside. Right Ctrl lets go.
@@ -61,10 +66,11 @@ Debug builds have extra modes, and none of them show a window.
 Coldboot.exe --test
 Coldboot.exe --cpu <folder with the 8088 v2 .json.gz files>
 Coldboot.exe --own [--a <image>] [--b <image>] <steps>
-Coldboot.exe --smoke <folder> [<image>]
+Coldboot.exe --smoke <folder> [<image> | --vm <machine file>]
+Coldboot.exe --smoke-manager <folder>
 ```
 
-- `--test` runs 131 checks across the CPU, the chips, the floppy controller, the assembler, disk images, the BIOS, save states, the x86-64 instruction emulator and the hypervisor engine. The hypervisor checks are skipped on PCs without the Windows Hypervisor Platform.
+- `--test` runs 136 checks across the CPU, the chips, the floppy controller, the assembler, disk images, the BIOS, save states, the x86-64 instruction emulator and the hypervisor engine. The hypervisor checks are skipped on PCs without the Windows Hypervisor Platform.
 - `--cpu` runs SingleStepTests. It also takes `--only <prefix>`, `--exact` and `--timing`.
 - `--own` boots the built-in BIOS and works through the steps in order. `--a` and `--b` take `.asm` files too:
   - `--run <seconds>` runs emulated time
@@ -73,6 +79,8 @@ Coldboot.exe --smoke <folder> [<image>]
   - `--ui <png>` renders the whole app offscreen, with `--ui-light`, `--ui-crt` and `--ui-panel disks` or `settings` to pick the look
   - `--where`, `--hunt` and `--trail` show where the CPU is and catch it running into empty memory
   - `--asm` assembles the BIOS and reports errors as `file.asm:line`
-- `--smoke` starts the real app in a hidden window with the sound off and your settings left alone. It boots, opens the floppy panel, saves and loads a state, and writes screenshots from the swap chain plus a short report into the folder.
+- `--smoke` starts a machine window hidden with the sound off and your settings left alone. It boots, opens the floppy panel, saves and loads a state, and writes screenshots from the swap chain plus a short report into the folder. Add `--vm <file>` to run a machine file the same way.
+- `--smoke-manager <folder>` runs the machine list hidden against a library in that folder. It creates, edits, removes and re-adds a machine, checks the files on disk and the saved screen preview, and writes screenshots and a report.
+- `--manager <png>` (after `--own`) renders the machine list offscreen, with `--manager-sheet new`, `settings` or `remove` and `--manager-empty`.
 
 Every screenshot here came from `--own` and `--ui`.

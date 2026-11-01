@@ -10,6 +10,7 @@ namespace app {
 		FILE_DISK,
 		FILE_ROM,
 		FILE_STATE,
+		FILE_MACHINE,
 
 	};
 

@@ -7,6 +7,7 @@
 #include "storage/blank.hh"
 #include "storage/program.hh"
 #include "ui/shell.hh"
+#include "vm/library.hh"
 #include <windows.h>
 #include <objbase.h>
 #include <dwmapi.h>
@@ -17,6 +18,12 @@
 bool test_main ( int32_t& result );
 
 #endif
+
+namespace app {
+
+	int manager_main ( const wchar_t* smoke_path );
+
+}
 
 static constexpr UINT_PTR animation_timer = 1;
 static constexpr UINT_PTR status_timer = 2;
@@ -45,6 +52,10 @@ static int32_t smoke_step = 0;
 static double smoke_started = 0.0;
 static wchar_t smoke_folder [ MAX_PATH ];
 static const wchar_t* capture_target = nullptr;
+static wchar_t machine_path [ MAX_PATH ] = { };
+static vm::config* machine_file = nullptr;
+static HANDLE machine_mutex = nullptr;
+static app::theme_choice stored_theme = app::THEME_SYSTEM;
 
 static double seconds ( ) {
 
@@ -88,10 +99,75 @@ static void copy_path ( wchar_t* out, const wchar_t* path ) {
 
 }
 
+static void settings_from_machine ( const vm::config& source, app::settings& out ) {
+
+	out.memory = source.memory;
+	out.turbo = source.turbo;
+	out.crt = source.crt;
+	out.fast_floppy = source.fast_floppy;
+	out.custom_bios = source.custom_bios;
+	out.maximized = source.maximized;
+	out.window_x = source.window_x;
+	out.window_y = source.window_y;
+	out.window_width = source.window_width;
+	out.window_height = source.window_height;
+	copy_path ( out.bios, source.bios );
+	copy_path ( out.disks [ 0 ], source.floppies [ 0 ] );
+	copy_path ( out.disks [ 1 ], source.floppies [ 1 ] );
+
+}
+
+static void machine_from_settings ( const app::settings& source, vm::config& out ) {
+
+	out.memory = base::clamp ( source.memory & ~15u, 64u, 640u );
+	out.turbo = source.turbo;
+	out.crt = source.crt;
+	out.fast_floppy = source.fast_floppy;
+	out.custom_bios = source.custom_bios;
+	out.maximized = source.maximized;
+	out.window_x = source.window_x;
+	out.window_y = source.window_y;
+	out.window_width = source.window_width;
+	out.window_height = source.window_height;
+	copy_path ( out.bios, source.bios );
+	copy_path ( out.floppies [ 0 ], source.disks [ 0 ] );
+	copy_path ( out.floppies [ 1 ], source.disks [ 1 ] );
+
+}
+
 static void store_settings ( ) {
 
-	if ( !smoke )
-		app::save_settings ( config );
+	if ( !machine_file ) {
+
+		if ( !smoke )
+			app::save_settings ( config );
+
+		return;
+
+	}
+
+	machine_from_settings ( config, *machine_file );
+	vm::save ( machine_path, *machine_file );
+
+	if ( !smoke && config.theme != stored_theme ) {
+
+		app::settings global;
+
+		app::load_settings ( global );
+		global.theme = config.theme;
+		app::save_settings ( global );
+		stored_theme = config.theme;
+
+	}
+
+}
+
+static void save_preview ( ) {
+
+	wchar_t folder [ MAX_PATH ];
+
+	if ( machine_file && vm::folder_of ( machine_path, folder ) )
+		vm::write_preview ( folder, frame, frame_width, frame_height );
 
 }
 
@@ -1014,6 +1090,9 @@ static LRESULT __stdcall procedure ( HWND window, UINT message, WPARAM wide, LPA
 			store_settings ( );
 			set_capture ( false );
 			emulator->power_off ( );
+			save_preview ( );
+
+			RemovePropW ( window, vm::window_tag );
 			files::settle ( );
 			PostQuitMessage ( 0 );
 
@@ -1088,20 +1167,45 @@ int program_main ( ) {
 	QueryPerformanceFrequency ( &clock_frequency );
 
 	const wchar_t* smoke_disk = nullptr;
-
-#ifdef COLDBOOT_DEBUG
-
+	bool files_given = false;
 	int32_t argument_count = 0;
 	wchar_t** arguments = CommandLineToArgvW ( GetCommandLineW ( ), &argument_count );
 
+	for ( int32_t i = 1; arguments && i < argument_count; i++ ) {
+
+		if ( base::same_text ( arguments [ i ], L"--vm" ) && i + 1 < argument_count ) {
+
+			copy_path ( machine_path, arguments [ i + 1 ] );
+			i++;
+
+		} else if ( base::same_text ( arguments [ i ], L"--smoke-manager" ) || base::same_text ( arguments [ i ], L"--smoke" ) )
+			i++;
+		else if ( arguments [ i ] [ 0 ] != L'-' )
+			files_given = true;
+
+	}
+
+#ifdef COLDBOOT_DEBUG
+
 	for ( int32_t i = 1; arguments && i + 1 < argument_count; i++ ) {
+
+		if ( base::same_text ( arguments [ i ], L"--smoke-manager" ) ) {
+
+			static wchar_t folder [ MAX_PATH ];
+
+			copy_path ( folder, arguments [ i + 1 ] );
+			LocalFree ( arguments );
+
+			return app::manager_main ( folder );
+
+		}
 
 		if ( base::same_text ( arguments [ i ], L"--smoke" ) ) {
 
 			smoke = true;
 			copy_path ( smoke_folder, arguments [ i + 1 ] );
 
-			if ( i + 2 < argument_count )
+			if ( i + 2 < argument_count && arguments [ i + 2 ] [ 0 ] != L'-' )
 				smoke_disk = arguments [ i + 2 ];
 
 		}
@@ -1117,15 +1221,63 @@ int program_main ( ) {
 
 	}
 
+#endif
+
 	if ( arguments )
 		LocalFree ( arguments );
 
-#endif
+	if ( !smoke && !machine_path [ 0 ] && !files_given )
+		return app::manager_main ( nullptr );
 
 	if ( smoke )
 		config.turbo = true;
 	else
 		app::load_settings ( config );
+
+	stored_theme = config.theme;
+
+	if ( machine_path [ 0 ] ) {
+
+		char problem [ 160 ] = { };
+		wchar_t mutex_name [ 64 ];
+
+		machine_file = new vm::config ( );
+
+		if ( !vm::load ( machine_path, *machine_file, problem, sizeof ( problem ) ) ) {
+
+			wchar_t text [ 260 ];
+			base::writer message;
+			int32_t written = MultiByteToWideChar ( CP_UTF8, 0, problem, -1, text, 259 );
+
+			text [ written > 0 ? written - 1 : 0 ] = 0;
+			message.add ( L"Coldboot couldn't open this machine.\n\n" ).add ( text );
+			MessageBoxW ( nullptr, message.text ( ), L"Coldboot", MB_ICONERROR );
+
+			return 1;
+
+		}
+
+		vm::running_name ( machine_path, mutex_name, 64 );
+		machine_mutex = CreateMutexW ( nullptr, FALSE, mutex_name );
+
+		if ( GetLastError ( ) == ERROR_ALREADY_EXISTS ) {
+
+			HWND other = vm::find_window ( machine_path );
+
+			if ( other ) {
+
+				ShowWindow ( other, IsIconic ( other ) ? SW_RESTORE : SW_SHOW );
+				SetForegroundWindow ( other );
+
+			}
+
+			return 0;
+
+		}
+
+		settings_from_machine ( *machine_file, config );
+
+	}
 
 	light_mode = app::use_light ( config );
 
@@ -1147,7 +1299,7 @@ int program_main ( ) {
 
 	emulator->muted = smoke;
 
-	if ( smoke ) {
+	if ( smoke && !machine_file ) {
 
 		if ( smoke_disk )
 			emulator->insert ( 0, smoke_disk );
@@ -1161,7 +1313,8 @@ int program_main ( ) {
 
 		}
 
-		open_command_line ( );
+		if ( !machine_file )
+			open_command_line ( );
 
 	}
 
@@ -1169,6 +1322,16 @@ int program_main ( ) {
 
 	if ( !main_window )
 		return 1;
+
+	if ( machine_file ) {
+
+		base::writer title;
+
+		title.add ( machine_file->name ).add ( L" - Coldboot" );
+		SetWindowTextW ( main_window, title.text ( ) );
+		SetPropW ( main_window, vm::window_tag, reinterpret_cast < HANDLE > ( vm::running_hash ( machine_path ) ) );
+
+	}
 
 	float scale = dip_scale ( );
 	RECT bounds = { 0, 0, static_cast < LONG > ( 1040.0f * scale ), static_cast < LONG > ( 860.0f * scale ) };
