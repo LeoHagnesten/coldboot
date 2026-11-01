@@ -26,6 +26,41 @@ namespace app {
 
 	};
 
+	static bool ends_with ( const wchar_t* path, const wchar_t* tail ) {
+
+		int32_t length = base::text_length ( path );
+		int32_t size = base::text_length ( tail );
+
+		if ( length < size )
+			return false;
+
+		for ( int32_t i = 0; i < size; i++ ) {
+
+			if ( ( path [ length - size + i ] | 0x20 ) != ( tail [ i ] | 0x20 ) )
+				return false;
+
+		}
+
+		return true;
+
+	}
+
+	static int32_t preset_index ( const char* id ) {
+
+		int32_t count = 0;
+		const vm::preset* table = vm::presets ( count );
+
+		for ( int32_t i = 0; i < count; i++ ) {
+
+			if ( base::same_text ( table [ i ].id, id ) )
+				return i;
+
+		}
+
+		return 0;
+
+	}
+
 	static constexpr UINT_PTR animation_timer = 1;
 	static constexpr UINT_PTR status_timer = 2;
 	static constexpr UINT_PTR smoke_timer = 3;
@@ -40,9 +75,10 @@ namespace app {
 	static base::list < ui::machine_card > cards;
 	static base::list < card_text > texts;
 	static preview_image preview;
-	static ui::preset_card choices [ 8 ];
+	static ui::preset_card choices [ 12 ];
 	static int32_t choice_count = 0;
 	static wchar_t home [ MAX_PATH ] = { };
+	static vm::host_info host;
 	static LARGE_INTEGER frequency;
 	static bool animating = false;
 	static bool double_click = false;
@@ -142,8 +178,19 @@ namespace app {
 			vm::folder_of ( item.path, text.folder );
 			card.name = item.readable ? item.settings.name : file_name ( item.path );
 			card.mark = kind ? kind->mark : L"XT";
-			card.kind = L"IBM PC/XT";
+			card.modern = item.settings.machine == vm::MACHINE_PC;
+			card.kind = card.modern ? L"Modern PC" : L"IBM PC/XT";
 			card.memory = item.settings.memory;
+			card.memory_mb = item.settings.memory_mb;
+			card.processors = item.settings.processors;
+			card.cap = item.settings.cap;
+			card.iso = item.settings.iso;
+			card.disk = item.settings.disk;
+
+			WIN32_FILE_ATTRIBUTE_DATA disk_data;
+
+			if ( card.modern && item.settings.disk [ 0 ] && GetFileAttributesExW ( item.settings.disk, GetFileExInfoStandard, &disk_data ) )
+				card.disk_bytes = static_cast < uint64_t > ( disk_data.nFileSizeHigh ) << 32 | disk_data.nFileSizeLow;
 			card.running = vm::is_running ( item.path );
 			card.floppies [ 0 ] = item.settings.floppies [ 0 ];
 			card.floppies [ 1 ] = item.settings.floppies [ 1 ];
@@ -205,6 +252,9 @@ namespace app {
 		state.presets = choices;
 		state.preset_count = choice_count;
 		state.location = home;
+		state.host_memory_mb = host.memory_mb;
+		state.host_logical = host.logical;
+		state.host_physical = host.physical;
 		view->paint ( *display, state, now_seconds ( ) );
 		display->end ( );
 
@@ -293,6 +343,17 @@ namespace app {
 
 		const wchar_t* path = shelf->at ( selected ).path;
 
+		if ( shelf->at ( selected ).settings.machine == vm::MACHINE_PC ) {
+
+			if ( smoke )
+				smoke_report->add ( L"start held back for a modern PC\r\n" );
+
+			toast ( L"Modern PCs can't start yet. Their firmware is the milestone in progress." );
+
+			return;
+
+		}
+
 		if ( vm::is_running ( path ) ) {
 
 			HWND other = vm::find_window ( path );
@@ -341,29 +402,68 @@ namespace app {
 
 	}
 
-	static void open_new ( ) {
+	static void open_new_as ( int32_t index, const wchar_t* image, const wchar_t* disk ) {
 
+		int32_t count = 0;
+		const vm::preset* table = vm::presets ( count );
 		wchar_t name [ vm::name_room ];
-		const vm::preset* first = choice_count ? vm::find_preset ( "pcxt" ) : nullptr;
 
-		unique_name ( first ? first->label : L"IBM PC/XT", name );
+		index = base::clamp ( index, 0, count - 1 );
+		unique_name ( table [ index ].label, name );
 		view->form = ui::machine_form ( );
+		view->apply_preset ( index );
 		view->form.name.set ( name );
 		view->form.name.anchor = 0;
+
+		if ( image )
+			copy_text ( view->form.iso, image, ui::path_room );
+
+		if ( disk ) {
+
+			copy_text ( view->form.disk, disk, ui::path_room );
+			view->form.disk_mode = 1;
+
+		}
+
 		view->subject_running = false;
 		view->open_sheet ( ui::SHEET_NEW, now_seconds ( ) );
 		render ( );
 
 	}
 
+	static void open_new ( ) {
+
+		open_new_as ( preset_index ( "windows11" ), nullptr, nullptr );
+
+	}
+
+	static void open_image ( const wchar_t* path ) {
+
+		int32_t count = 0;
+		const vm::preset* table = vm::presets ( count );
+		const vm::preset* kind = vm::detect_image ( path );
+
+		open_new_as ( kind ? static_cast < int32_t > ( kind - table ) : preset_index ( "pc" ), path, nullptr );
+
+	}
+
 	static void form_to_config ( vm::config& out ) {
 
-		copy_text ( out.name, view->form.name.text, vm::name_room );
-		out.memory = view->form.memory;
-		out.custom_bios = view->form.custom_bios && view->form.bios [ 0 ];
-		copy_text ( out.bios, view->form.bios, MAX_PATH );
-		copy_text ( out.floppies [ 0 ], view->form.floppies [ 0 ], MAX_PATH );
-		copy_text ( out.floppies [ 1 ], view->form.floppies [ 1 ], MAX_PATH );
+		const ui::machine_form& form = view->form;
+
+		copy_text ( out.name, form.name.text, vm::name_room );
+		out.machine = form.modern ? vm::MACHINE_PC : vm::MACHINE_XT;
+		out.memory = form.memory;
+		out.custom_bios = form.custom_bios && form.bios [ 0 ];
+		copy_text ( out.bios, form.bios, MAX_PATH );
+		copy_text ( out.floppies [ 0 ], form.floppies [ 0 ], MAX_PATH );
+		copy_text ( out.floppies [ 1 ], form.floppies [ 1 ], MAX_PATH );
+		out.memory_mb = form.memory_mb;
+		out.processors = form.processors;
+		out.cap = form.cap;
+		out.disk_first = form.disk_first;
+		copy_text ( out.iso, form.iso, MAX_PATH );
+		copy_text ( out.disk, form.disk_mode == 1 || view->sheet == ui::SHEET_SETTINGS ? form.disk : L"", MAX_PATH );
 
 	}
 
@@ -385,7 +485,8 @@ namespace app {
 
 		}
 
-		bool made = shelf->create ( *settings, home, path, error, sizeof ( error ) );
+		uint64_t disk_bytes = view->form.modern && view->form.disk_mode == 0 ? static_cast < uint64_t > ( view->form.disk_gb ) << 30 : 0;
+		bool made = shelf->create ( *settings, home, path, error, sizeof ( error ), disk_bytes );
 
 		if ( made ) {
 
@@ -418,12 +519,21 @@ namespace app {
 		const vm::config& source = shelf->at ( selected ).settings;
 
 		view->form = ui::machine_form ( );
+		view->form.preset = preset_index ( source.os );
 		view->form.name.set ( source.name );
 		view->form.memory = source.memory;
 		view->form.custom_bios = source.custom_bios;
 		copy_text ( view->form.bios, source.bios, ui::path_room );
 		copy_text ( view->form.floppies [ 0 ], source.floppies [ 0 ], ui::path_room );
 		copy_text ( view->form.floppies [ 1 ], source.floppies [ 1 ], ui::path_room );
+		view->form.modern = source.machine == vm::MACHINE_PC;
+		view->form.memory_mb = source.memory_mb;
+		view->form.processors = source.processors;
+		view->form.cap = source.cap;
+		view->form.disk_first = source.disk_first;
+		view->form.disk_mode = source.disk [ 0 ] ? 1 : 2;
+		copy_text ( view->form.iso, source.iso, ui::path_room );
+		copy_text ( view->form.disk, source.disk, ui::path_room );
 		view->subject_running = vm::is_running ( shelf->at ( selected ).path );
 		view->open_sheet ( ui::SHEET_SETTINGS, now_seconds ( ) );
 		render ( );
@@ -477,12 +587,11 @@ namespace app {
 
 	}
 
-	static void forget ( bool recycle_files ) {
+	static void forget ( bool delete_files ) {
 
 		if ( selected < 0 )
 			return;
 
-		wchar_t folder [ MAX_PATH ];
 		vm::entry& item = shelf->at ( selected );
 
 		if ( vm::is_running ( item.path ) ) {
@@ -493,11 +602,17 @@ namespace app {
 
 		}
 
-		if ( recycle_files && ( !vm::folder_of ( item.path, folder ) || !vm::recycle ( folder ) ) ) {
+		if ( delete_files ) {
 
-			toast ( L"Couldn't move the folder to the Recycle Bin" );
+			shelf->refresh ( selected );
 
-			return;
+			if ( !vm::erase ( item.path, item.readable ? &item.settings : nullptr ) ) {
+
+				toast ( L"Couldn't delete the machine's files" );
+
+				return;
+
+			}
 
 		}
 
@@ -508,7 +623,7 @@ namespace app {
 		view->close_sheet ( );
 		selected = -1;
 		select ( index );
-		toast ( recycle_files ? L"Moved to the Recycle Bin" : L"Removed from the list" );
+		toast ( delete_files ? L"Deleted" : L"Removed from the list" );
 
 	}
 
@@ -621,6 +736,32 @@ namespace app {
 
 					copy_text ( view->form.bios, path, ui::path_room );
 					view->form.custom_bios = true;
+
+				}
+
+				break;
+
+			}
+
+			case ui::ACTION_PICK_ISO: {
+
+				wchar_t path [ MAX_PATH ];
+
+				if ( open_file ( window, FILE_IMAGE, path ) )
+					copy_text ( view->form.iso, path, ui::path_room );
+
+				break;
+
+			}
+
+			case ui::ACTION_PICK_DISK: {
+
+				wchar_t path [ MAX_PATH ];
+
+				if ( open_file ( window, FILE_HARD_DISK, path ) ) {
+
+					copy_text ( view->form.disk, path, ui::path_room );
+					view->form.disk_mode = 1;
 
 				}
 
@@ -751,15 +892,20 @@ namespace app {
 		} else if ( smoke_step == 5 ) {
 
 			act ( ui::ACTION_SETTINGS, 0 );
-			view->form.memory = 512;
-			view->form.name.set ( L"Smoke XT 512" );
+			view->form.memory_mb = 3072;
+			view->form.processors = 3;
+			view->form.cap = 60;
+			view->form.name.set ( L"Smoke PC" );
 			act ( ui::ACTION_SAVE, 0 );
 
 			vm::config reread;
 			char error [ 160 ] = { };
 			bool loaded = selected >= 0 && vm::load ( shelf->at ( selected ).path, reread, error, sizeof ( error ) );
+			WIN32_FILE_ATTRIBUTE_DATA disk = { };
+			bool sized = loaded && GetFileAttributesExW ( reread.disk, GetFileExInfoStandard, &disk ) && disk.nFileSizeHigh == 16;
 
-			smoke_report->add ( L"saved " ).add ( loaded && reread.memory == 512 && base::same_text ( reread.name, L"Smoke XT 512" ) ? L"yes" : L"no" ).add ( L"\r\n" );
+			smoke_report->add ( L"saved " ).add ( loaded && reread.machine == vm::MACHINE_PC && reread.memory_mb == 3072 && reread.processors == 3 && reread.cap == 60 && base::same_text ( reread.name, L"Smoke PC" ) ? L"yes" : L"no" ).add ( L"\r\n" );
+			smoke_report->add ( L"disk " ).add ( sized ? L"64 GB" : L"missing" ).add ( L"\r\n" );
 			act ( ui::ACTION_START, 0 );
 
 		} else if ( smoke_step == 6 ) {
@@ -798,6 +944,26 @@ namespace app {
 			smoke_capture ( L"manager_back.png" );
 
 		} else if ( smoke_step == 8 ) {
+
+			wchar_t path [ MAX_PATH ] = { };
+			wchar_t disk [ MAX_PATH ] = { };
+			wchar_t folder [ MAX_PATH ] = { };
+
+			if ( shelf->count ( ) ) {
+
+				copy_text ( path, shelf->at ( 0 ).path, MAX_PATH );
+				copy_text ( disk, shelf->at ( 0 ).settings.disk, MAX_PATH );
+				vm::folder_of ( path, folder );
+
+			}
+
+			act ( ui::ACTION_DELETE, 0 );
+
+			bool gone = path [ 0 ] && disk [ 0 ] && shelf->count ( ) == 0 && GetFileAttributesW ( path ) == INVALID_FILE_ATTRIBUTES && GetFileAttributesW ( disk ) == INVALID_FILE_ATTRIBUTES && GetFileAttributesW ( folder ) == INVALID_FILE_ATTRIBUTES;
+
+			smoke_report->add ( L"deleted " ).add ( gone ? L"yes" : L"no" ).add ( L"\r\n" );
+
+		} else if ( smoke_step == 9 ) {
 
 			char bytes [ 1024 ];
 			int32_t size = WideCharToMultiByte ( CP_UTF8, 0, smoke_report->text ( ), smoke_report->size ( ), bytes, sizeof ( bytes ), nullptr, nullptr );
@@ -978,8 +1144,17 @@ namespace app {
 
 				for ( UINT i = 0; i < total; i++ ) {
 
-					if ( DragQueryFileW ( drop, i, path, MAX_PATH ) )
+					if ( !DragQueryFileW ( drop, i, path, MAX_PATH ) )
+						continue;
+
+					if ( ends_with ( path, L".iso" ) )
+						open_image ( path );
+					else if ( ends_with ( path, L".img" ) || ends_with ( path, L".raw" ) )
+						open_new_as ( preset_index ( "pc" ), nullptr, path );
+					else if ( ends_with ( path, L".coldboot" ) )
 						add_existing ( path );
+					else
+						toast ( L"Drop an ISO, a hard disk image or a .coldboot machine" );
 
 				}
 
@@ -1071,11 +1246,18 @@ namespace app {
 
 		const vm::preset* table = vm::presets ( choice_count );
 
-		for ( int32_t i = 0; i < choice_count && i < 8; i++ ) {
+		host = vm::read_host ( );
+		choice_count = base::min ( choice_count, 12 );
+
+		for ( int32_t i = 0; i < choice_count; i++ ) {
 
 			choices [ i ].label = table [ i ].label;
 			choices [ i ].detail = table [ i ].detail;
 			choices [ i ].mark = table [ i ].mark;
+			choices [ i ].modern = table [ i ].machine == vm::MACHINE_PC;
+			choices [ i ].memory_mb = table [ i ].memory;
+			choices [ i ].processors = table [ i ].processors;
+			choices [ i ].disk_gb = table [ i ].disk_gb;
 
 		}
 

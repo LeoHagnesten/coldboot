@@ -226,6 +226,19 @@ namespace hv {
 
 	}
 
+	bool machine::virtual_wire ( uint32_t processor ) {
+
+		WHV_REGISTER_NAME names [ 3 ] = { WHvX64RegisterApicSpurious, WHvX64RegisterApicLvtLint0, WHvX64RegisterApicLvtLint1 };
+		WHV_REGISTER_VALUE values [ 3 ] = { };
+
+		values [ 0 ].Reg64 = 0x1FF;
+		values [ 1 ].Reg64 = 0x700;
+		values [ 2 ].Reg64 = 0x400;
+
+		return core.set_registers ( processor, names, 3, values );
+
+	}
+
 	bool machine::start ( ) {
 
 		if ( thread_count || !core.processors )
@@ -350,6 +363,22 @@ namespace hv {
 		}
 
 		return true;
+
+	}
+
+	void machine::legacy_changed ( ) {
+
+		if ( !legacy || !legacy->asserted ( ) )
+			return;
+
+		InterlockedExchange ( &legacy_wanted, 1 );
+
+		if ( thread_count ) {
+
+			core.cancel ( 0 );
+			SetEvent ( threads [ 0 ].wake );
+
+		}
 
 	}
 
@@ -525,7 +554,7 @@ namespace hv {
 
 			}
 
-			if ( pending [ index ] && !deliver_external ( index ) )
+			if ( ( pending [ index ] || ( index == 0 && legacy_wanted ) ) && !deliver_external ( index ) )
 				return;
 
 			WHV_RUN_VP_EXIT_CONTEXT exit = { };
@@ -776,6 +805,20 @@ namespace hv {
 		}
 
 		long vector = InterlockedExchange ( &pending [ index ], 0 );
+
+		if ( !vector && index == 0 && legacy ) {
+
+			AcquireSRWLockExclusive ( &device_lock );
+
+			if ( legacy->asserted ( ) )
+				vector = 0x100 | legacy->acknowledge ( );
+
+			if ( !legacy->asserted ( ) )
+				InterlockedExchange ( &legacy_wanted, 0 );
+
+			ReleaseSRWLockExclusive ( &device_lock );
+
+		}
 
 		if ( !vector )
 			return true;

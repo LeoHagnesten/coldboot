@@ -15,6 +15,51 @@ namespace ui {
 
 	static const uint32_t memory_choices [ 3 ] = { 256, 512, 640 };
 
+	static void memory_text ( base::writer& out, uint32_t megabytes ) {
+
+		if ( megabytes < 1024 )
+			out.number ( megabytes ).add ( L" MB" );
+		else if ( megabytes % 1024 )
+			out.fixed ( megabytes / 1024.0, 1 ).add ( L" GB" );
+		else
+			out.number ( megabytes / 1024 ).add ( L" GB" );
+
+	}
+
+	static uint32_t snap ( uint32_t value, uint32_t step ) {
+
+		return ( value + step / 2 ) / step * step;
+
+	}
+
+	static float disk_position ( uint32_t gigabytes ) {
+
+		float value = static_cast < float > ( base::clamp ( gigabytes, 4u, 2048u ) ) / 4.0f;
+		float octaves = 0.0f;
+
+		while ( value >= 2.0f ) {
+
+			value *= 0.5f;
+			octaves += 1.0f;
+
+		}
+
+		return base::clamp ( ( octaves + value - 1.0f ) / 9.0f, 0.0f, 1.0f );
+
+	}
+
+	static uint32_t disk_from ( float position ) {
+
+		float scaled = base::clamp ( position, 0.0f, 1.0f ) * 9.0f;
+		int32_t octave = base::min ( static_cast < int32_t > ( scaled ), 8 );
+		float value = 4.0f * static_cast < float > ( 1 << octave ) * ( 1.0f + scaled - static_cast < float > ( octave ) );
+		uint32_t gigabytes = static_cast < uint32_t > ( value + 0.5f );
+		uint32_t step = gigabytes < 32 ? 1u : ( gigabytes < 128 ? 4u : ( gigabytes < 512 ? 16u : 64u ) );
+
+		return base::clamp ( snap ( gigabytes, step ), 4u, 2048u );
+
+	}
+
 	static float approach ( float value, float target, float dt, float rate ) {
 
 		return value + ( target - value ) * base::min ( 1.0f, dt * rate );
@@ -169,6 +214,14 @@ namespace ui {
 
 	void manager::mouse_move ( float x, float y, double ) {
 
+		if ( dragging >= 0 ) {
+
+			set_slider ( dragging, x );
+
+			return;
+
+		}
+
 		const hit* found = find ( x, y );
 		manager_action action = found ? found->action : ACTION_NONE;
 		int32_t index = found ? found->index : -1;
@@ -238,6 +291,64 @@ namespace ui {
 		} else if ( sheet != SHEET_NONE )
 			field_focused = false;
 
+		if ( press_action == ACTION_SLIDER && editing ( ) ) {
+
+			dragging = press_index;
+			set_slider ( dragging, x );
+
+		}
+
+	}
+
+	void manager::set_slider ( int32_t which, float x ) {
+
+		rect area = slider_areas [ which & 3 ];
+
+		if ( area.w <= 0.0f )
+			return;
+
+		float position = base::clamp ( ( x - area.x ) / area.w, 0.0f, 1.0f );
+
+		if ( which == 0 ) {
+
+			uint32_t top = base::max ( host_memory, 1024u );
+			uint32_t value = 256 + static_cast < uint32_t > ( position * static_cast < float > ( top - 256 ) );
+			uint32_t step = value < 2048 ? 128u : ( value < 16384 ? 512u : 1024u );
+
+			form.memory_mb = base::clamp ( snap ( value, step ), 256u, top );
+
+		} else if ( which == 1 ) {
+
+			uint32_t top = base::max ( host_logical, 1u );
+
+			form.processors = base::clamp ( 1 + static_cast < uint32_t > ( position * static_cast < float > ( top - 1 ) + 0.5f ), 1u, top );
+
+		} else if ( which == 2 )
+			form.disk_gb = disk_from ( position );
+		else
+			form.cap = base::clamp ( snap ( 10 + static_cast < uint32_t > ( position * 90.0f ), 5 ), 10u, 100u );
+
+	}
+
+	void manager::apply_preset ( int32_t index ) {
+
+		form.preset = index;
+
+		if ( !known_presets || index < 0 || index >= known_count )
+			return;
+
+		const preset_card& item = known_presets [ index ];
+
+		form.modern = item.modern;
+
+		if ( item.modern ) {
+
+			form.memory_mb = base::min ( item.memory_mb, base::max ( host_memory / 2, 512u ) );
+			form.processors = base::min ( item.processors, base::max ( host_logical / 2, 1u ) );
+			form.disk_gb = item.disk_gb ? item.disk_gb : 16;
+
+		}
+
 	}
 
 	manager_action manager::mouse_up ( float x, float y, int32_t& index ) {
@@ -246,6 +357,15 @@ namespace ui {
 		manager_action action = found ? found->action : ACTION_NONE;
 
 		index = found ? found->index : -1;
+
+		if ( dragging >= 0 ) {
+
+			dragging = -1;
+			press_action = ACTION_NONE;
+
+			return ACTION_NONE;
+
+		}
 
 		bool same = action == press_action && index == press_index;
 
@@ -262,7 +382,7 @@ namespace ui {
 				return ACTION_NONE;
 
 			case ACTION_PRESET:
-				form.preset = index;
+				apply_preset ( index );
 				return ACTION_NONE;
 
 			case ACTION_MEMORY:
@@ -270,7 +390,35 @@ namespace ui {
 				return ACTION_NONE;
 
 			case ACTION_EJECT:
-				form.floppies [ index & 1 ] [ 0 ] = 0;
+
+				if ( index < 2 )
+					form.floppies [ index ] [ 0 ] = 0;
+				else if ( index == 2 )
+					form.iso [ 0 ] = 0;
+				else
+					form.disk [ 0 ] = 0;
+
+				return ACTION_NONE;
+
+			case ACTION_DISK_MODE:
+
+				if ( index == 1 )
+					return ACTION_PICK_DISK;
+
+				form.disk_mode = index;
+
+				return ACTION_NONE;
+
+			case ACTION_BOOT:
+				form.disk_first = index == 1;
+				return ACTION_NONE;
+
+			case ACTION_CATEGORY:
+				category = index;
+				field_focused = index == 0 && editing ( );
+				return ACTION_NONE;
+
+			case ACTION_SLIDER:
 				return ACTION_NONE;
 
 			case ACTION_BIOS_BUILTIN:
@@ -440,6 +588,8 @@ namespace ui {
 
 		sheet = kind;
 		sheet_since = now;
+		category = 0;
+		dragging = -1;
 		field_focused = kind == SHEET_NEW || ( kind == SHEET_SETTINGS && !subject_running );
 		caret_since = now;
 
@@ -641,6 +791,11 @@ namespace ui {
 		hover_amount = approach ( hover_amount, 1.0f, dt, 18.0f );
 		sheet_amount = approach ( sheet_amount, sheet != SHEET_NONE ? 1.0f : 0.0f, dt, 20.0f );
 		hit_count = 0;
+		host_memory = base::max ( state.host_memory_mb, 1024u );
+		host_logical = base::max ( state.host_logical, 1u );
+		host_physical = base::max ( state.host_physical, 1u );
+		known_presets = state.presets;
+		known_count = state.preset_count;
 
 		if ( !gpu.begin ( colors.background ) )
 			return;
@@ -737,7 +892,12 @@ namespace ui {
 
 				if ( card.running )
 					text.add ( L"Running" );
-				else
+				else if ( card.modern ) {
+
+					text.add ( card.kind ).add ( L"  \x00B7  " );
+					memory_text ( text, card.memory_mb );
+
+				} else
 					text.add ( card.kind ).add ( L"  \x00B7  " ).number ( card.memory ).add ( L" KB" );
 
 				gpu.text ( text.text ( ), render::FONT_SMALL, detail, colors.muted, render::ALIGN_LEFT );
@@ -897,20 +1057,55 @@ namespace ui {
 		float top = stacked ? preview.bottom ( ) + 24.0f : y;
 		base::writer memory;
 
-		memory.number ( card.memory ).add ( L" KB" );
-		section ( gpu, colors, column, top, side, L"SYSTEM" );
-		property ( gpu, colors, column, top, side, L"Machine", card.kind, false );
-		property ( gpu, colors, column, top, side, L"Processor", L"Intel 8088, 4.77 MHz", false );
-		property ( gpu, colors, column, top, side, L"Memory", memory.text ( ), false );
-		property ( gpu, colors, column, top, side, L"Video", L"CGA", false );
-		top += 14.0f;
-		section ( gpu, colors, column, top, side, L"STORAGE" );
-		property ( gpu, colors, column, top, side, L"Floppy A", card.floppies [ 0 ] [ 0 ] ? file_name ( card.floppies [ 0 ] ) : L"Empty", !card.floppies [ 0 ] [ 0 ] );
-		property ( gpu, colors, column, top, side, L"Floppy B", card.floppies [ 1 ] [ 0 ] ? file_name ( card.floppies [ 1 ] ) : L"Empty", !card.floppies [ 1 ] [ 0 ] );
-		top += 14.0f;
-		section ( gpu, colors, column, top, side, L"FIRMWARE" );
-		property ( gpu, colors, column, top, side, L"BIOS", card.bios, false );
-		top += 14.0f;
+		if ( card.modern ) {
+
+			base::writer processors;
+			base::writer cap;
+			base::writer disk;
+
+			memory_text ( memory, card.memory_mb );
+			processors.number ( card.processors ).add ( card.processors == 1 ? L" processor" : L" processors" );
+			cap.number ( card.cap ).add ( L"% of each core" );
+
+			if ( card.disk [ 0 ] ) {
+
+				disk.add ( file_name ( card.disk ) );
+
+				if ( card.disk_bytes )
+					disk.add ( L"  \x00B7  " ).number ( static_cast < int64_t > ( card.disk_bytes >> 30 ) ).add ( L" GB" );
+
+			} else
+				disk.add ( L"None" );
+
+			section ( gpu, colors, column, top, side, L"SYSTEM" );
+			property ( gpu, colors, column, top, side, L"Machine", card.kind, false );
+			property ( gpu, colors, column, top, side, L"Processors", processors.text ( ), false );
+			property ( gpu, colors, column, top, side, L"CPU cap", cap.text ( ), false );
+			property ( gpu, colors, column, top, side, L"Memory", memory.text ( ), false );
+			top += 14.0f;
+			section ( gpu, colors, column, top, side, L"STORAGE" );
+			property ( gpu, colors, column, top, side, L"CD/DVD", card.iso [ 0 ] ? file_name ( card.iso ) : L"Empty", !card.iso [ 0 ] );
+			property ( gpu, colors, column, top, side, L"Hard disk", disk.text ( ), !card.disk [ 0 ] );
+			top += 14.0f;
+
+		} else {
+
+			memory.number ( card.memory ).add ( L" KB" );
+			section ( gpu, colors, column, top, side, L"SYSTEM" );
+			property ( gpu, colors, column, top, side, L"Machine", card.kind, false );
+			property ( gpu, colors, column, top, side, L"Processor", L"Intel 8088, 4.77 MHz", false );
+			property ( gpu, colors, column, top, side, L"Memory", memory.text ( ), false );
+			property ( gpu, colors, column, top, side, L"Video", L"CGA", false );
+			top += 14.0f;
+			section ( gpu, colors, column, top, side, L"STORAGE" );
+			property ( gpu, colors, column, top, side, L"Floppy A", card.floppies [ 0 ] [ 0 ] ? file_name ( card.floppies [ 0 ] ) : L"Empty", !card.floppies [ 0 ] [ 0 ] );
+			property ( gpu, colors, column, top, side, L"Floppy B", card.floppies [ 1 ] [ 0 ] ? file_name ( card.floppies [ 1 ] ) : L"Empty", !card.floppies [ 1 ] [ 0 ] );
+			top += 14.0f;
+			section ( gpu, colors, column, top, side, L"FIRMWARE" );
+			property ( gpu, colors, column, top, side, L"BIOS", card.bios, false );
+			top += 14.0f;
+
+		}
 		section ( gpu, colors, column, top, side, L"LOCATION" );
 		gpu.text ( card.folder, render::FONT_SMALL, rect { column, top, side, 18.0f }, colors.muted, render::ALIGN_LEFT );
 		top += 22.0f;
@@ -939,7 +1134,28 @@ namespace ui {
 
 	}
 
-	float manager::paint_machine_fields ( render::gpu& gpu, const theme& colors, float x, float y, float inner, bool enabled ) {
+	float manager::file_row ( render::gpu& gpu, const theme& colors, float x, float y, float inner, const wchar_t* label, const wchar_t* path, manager_action browse, manager_action eject, int32_t index, bool enabled, const wchar_t* empty ) {
+
+		bool present = path [ 0 ] != 0;
+		float control_x = x + label_column;
+		float control_width = inner - label_column;
+		float buttons = present ? 84.0f + 6.0f + 64.0f : 84.0f;
+		rect slot = { control_x, y, control_width - buttons - 6.0f, control_height };
+
+		gpu.text ( label, render::FONT_BODY, rect { x, y, label_column, control_height }, enabled ? colors.muted : colors.faint, render::ALIGN_LEFT );
+		gpu.fill ( slot, corner, colors.inset );
+		gpu.stroke ( slot, corner, 1.0f, colors.divider );
+		gpu.text ( present ? file_name ( path ) : empty, render::FONT_BODY, rect { slot.x + 10.0f, slot.y, slot.w - 20.0f, slot.h }, present && enabled ? colors.text : colors.faint, render::ALIGN_LEFT );
+		button ( gpu, colors, rect { slot.right ( ) + 6.0f, y, 84.0f, control_height }, L"Browse\x2026", browse, 1, enabled, index );
+
+		if ( present )
+			button ( gpu, colors, rect { slot.right ( ) + 6.0f + 84.0f + 6.0f, y, 64.0f, control_height }, eject == ACTION_EJECT && index >= 2 ? L"Remove" : L"Eject", eject, 2, enabled, index );
+
+		return y + control_height + 10.0f;
+
+	}
+
+	float manager::paint_xt_system ( render::gpu& gpu, const theme& colors, float x, float y, float inner, bool enabled ) {
 
 		static const wchar_t* const memory_labels [ 3 ] = { L"256 KB", L"512 KB", L"640 KB" };
 		static const wchar_t* const bios_labels [ 2 ] = { L"Coldboot BIOS", L"Custom ROM\x2026" };
@@ -951,46 +1167,195 @@ namespace ui {
 		gpu.text ( L"Memory", render::FONT_BODY, rect { x, y, label_column, control_height }, label_tint, render::ALIGN_LEFT );
 		segmented ( gpu, colors, rect { control_x, y, control_width, control_height }, memory_labels, 3, memory_index, ACTION_MEMORY, enabled );
 		y += control_height + 10.0f;
-
-		for ( int32_t d = 0; d < 2; d++ ) {
-
-			const wchar_t* path = form.floppies [ d ];
-			bool present = path [ 0 ] != 0;
-			float buttons = present ? 84.0f + 6.0f + 64.0f : 84.0f;
-			rect slot = { control_x, y, control_width - buttons - 6.0f, control_height };
-
-			gpu.text ( d ? L"Floppy B" : L"Floppy A", render::FONT_BODY, rect { x, y, label_column, control_height }, label_tint, render::ALIGN_LEFT );
-			gpu.fill ( slot, corner, colors.inset );
-			gpu.stroke ( slot, corner, 1.0f, colors.divider );
-			gpu.text ( present ? file_name ( path ) : L"Empty", render::FONT_BODY, rect { slot.x + 10.0f, slot.y, slot.w - 20.0f, slot.h }, present && enabled ? colors.text : colors.faint, render::ALIGN_LEFT );
-			button ( gpu, colors, rect { slot.right ( ) + 6.0f, y, 84.0f, control_height }, L"Browse\x2026", ACTION_PICK_FLOPPY, 1, enabled, d );
-
-			if ( present )
-				button ( gpu, colors, rect { slot.right ( ) + 6.0f + 84.0f + 6.0f, y, 64.0f, control_height }, L"Eject", ACTION_EJECT, 2, enabled, d );
-
-			y += control_height + 10.0f;
-
-		}
-
 		gpu.text ( L"BIOS", render::FONT_BODY, rect { x, y, label_column, control_height }, label_tint, render::ALIGN_LEFT );
 		segmented ( gpu, colors, rect { control_x, y, control_width, control_height }, bios_labels, 2, form.custom_bios ? 1 : 0, ACTION_BIOS_BUILTIN, enabled );
 		y += control_height + 6.0f;
 		gpu.text ( form.custom_bios && form.bios [ 0 ] ? file_name ( form.bios ) : L"Built in, assembled from source at power on", render::FONT_SMALL, rect { control_x, y, control_width, 18.0f }, colors.faint, render::ALIGN_LEFT );
 
-		return y + 26.0f;
+		return y + 30.0f;
+
+	}
+
+	float manager::paint_xt_storage ( render::gpu& gpu, const theme& colors, float x, float y, float inner, bool enabled ) {
+
+		y = file_row ( gpu, colors, x, y, inner, L"Floppy A", form.floppies [ 0 ], ACTION_PICK_FLOPPY, ACTION_EJECT, 0, enabled, L"Empty" );
+
+		return file_row ( gpu, colors, x, y, inner, L"Floppy B", form.floppies [ 1 ], ACTION_PICK_FLOPPY, ACTION_EJECT, 1, enabled, L"Empty" );
+
+	}
+
+	float manager::paint_machine_fields ( render::gpu& gpu, const theme& colors, float x, float y, float inner, bool enabled ) {
+
+		y = paint_xt_system ( gpu, colors, x, y, inner, enabled );
+
+		return paint_xt_storage ( gpu, colors, x, y, inner, enabled );
+
+	}
+
+	void manager::slider ( render::gpu& gpu, const theme& colors, rect area, int32_t which, bool enabled ) {
+
+		float middle = area.y + area.h * 0.5f;
+		float position = 0.0f;
+		uint32_t top = base::max ( host_memory, 1024u );
+
+		slider_areas [ which ] = area;
+
+		if ( which == 0 )
+			position = static_cast < float > ( form.memory_mb - base::min ( form.memory_mb, 256u ) ) / static_cast < float > ( top - 256 );
+		else if ( which == 1 )
+			position = host_logical > 1 ? static_cast < float > ( form.processors - 1 ) / static_cast < float > ( host_logical - 1 ) : 1.0f;
+		else if ( which == 2 )
+			position = disk_position ( form.disk_gb );
+		else
+			position = static_cast < float > ( form.cap - 10 ) / 90.0f;
+
+		position = base::clamp ( position, 0.0f, 1.0f );
+		gpu.fill ( rect { area.x, middle - 2.0f, area.w, 4.0f }, 2.0f, colors.divider );
+
+		if ( which <= 1 ) {
+
+			float safe = 0.0f;
+			float warm = 0.0f;
+
+			if ( which == 0 ) {
+
+				safe = static_cast < float > ( top / 2 - 256 ) / static_cast < float > ( top - 256 );
+				warm = static_cast < float > ( top * 4 / 5 - 256 ) / static_cast < float > ( top - 256 );
+
+			} else {
+
+				safe = host_logical > 1 ? static_cast < float > ( host_physical - 1 ) / static_cast < float > ( host_logical - 1 ) : 1.0f;
+				warm = 1.0f;
+
+			}
+
+			gpu.fill ( rect { area.x, middle - 2.0f, area.w * safe, 4.0f }, 2.0f, fade ( colors.led_green, enabled ? 0.55f : 0.25f ) );
+			gpu.fill ( rect { area.x + area.w * safe, middle - 2.0f, area.w * ( warm - safe ), 4.0f }, 0.0f, fade ( colors.accent, enabled ? 0.55f : 0.25f ) );
+
+			if ( warm < 1.0f )
+				gpu.fill ( rect { area.x + area.w * warm, middle - 2.0f, area.w * ( 1.0f - warm ), 4.0f }, 2.0f, fade ( colors.danger, enabled ? 0.55f : 0.25f ) );
+
+		} else
+			gpu.fill ( rect { area.x, middle - 2.0f, area.w * position, 4.0f }, 2.0f, enabled ? colors.accent : colors.faint );
+
+		float x = area.x + area.w * position;
+		float amount = enabled ? base::max ( glow ( ACTION_SLIDER, which ), dragging == which ? 1.0f : 0.0f ) : 0.0f;
+
+		gpu.circle ( x, middle, 8.0f + amount, colors.raised );
+		gpu.ring ( x, middle, 8.0f + amount, 1.0f, enabled ? colors.divider : colors.faint );
+		gpu.circle ( x, middle, 3.5f, enabled ? colors.accent : colors.faint );
+
+		if ( enabled )
+			add_hit ( rect { area.x - 10.0f, area.y, area.w + 20.0f, area.h }, ACTION_SLIDER, which );
+
+	}
+
+	float manager::paint_pc_system ( render::gpu& gpu, const theme& colors, float x, float y, float inner, bool enabled, bool full ) {
+
+		static const wchar_t* const boot_labels [ 2 ] = { L"CD/DVD first", L"Hard disk first" };
+		float control_x = x + label_column;
+		float track = inner - label_column - 96.0f;
+		color label_tint = enabled ? colors.muted : colors.faint;
+		base::writer memory;
+		base::writer processors;
+		base::writer host;
+
+		memory_text ( memory, form.memory_mb );
+		processors.number ( form.processors ).add ( form.processors == 1 ? L" CPU" : L" CPUs" );
+		gpu.text ( L"Memory", render::FONT_BODY, rect { x, y, label_column, control_height }, label_tint, render::ALIGN_LEFT );
+		slider ( gpu, colors, rect { control_x + 8.0f, y, track - 16.0f, control_height }, 0, enabled );
+		gpu.text ( memory.text ( ), render::FONT_STRONG, rect { control_x + track, y, 96.0f, control_height }, enabled ? colors.text : colors.faint, render::ALIGN_RIGHT );
+		y += control_height + 10.0f;
+		gpu.text ( L"Processors", render::FONT_BODY, rect { x, y, label_column, control_height }, label_tint, render::ALIGN_LEFT );
+		slider ( gpu, colors, rect { control_x + 8.0f, y, track - 16.0f, control_height }, 1, enabled );
+		gpu.text ( processors.text ( ), render::FONT_STRONG, rect { control_x + track, y, 96.0f, control_height }, enabled ? colors.text : colors.faint, render::ALIGN_RIGHT );
+		y += control_height + 10.0f;
+
+		if ( full ) {
+
+			base::writer cap;
+
+			cap.number ( form.cap ).add ( L"%" );
+			gpu.text ( L"CPU cap", render::FONT_BODY, rect { x, y, label_column, control_height }, label_tint, render::ALIGN_LEFT );
+			slider ( gpu, colors, rect { control_x + 8.0f, y, track - 16.0f, control_height }, 3, enabled );
+			gpu.text ( cap.text ( ), render::FONT_STRONG, rect { control_x + track, y, 96.0f, control_height }, enabled ? colors.text : colors.faint, render::ALIGN_RIGHT );
+			y += control_height + 10.0f;
+			gpu.text ( L"Boot order", render::FONT_BODY, rect { x, y, label_column, control_height }, label_tint, render::ALIGN_LEFT );
+			segmented ( gpu, colors, rect { control_x, y, inner - label_column, control_height }, boot_labels, 2, form.disk_first ? 1 : 0, ACTION_BOOT, enabled );
+			y += control_height + 10.0f;
+
+		}
+
+		host.add ( L"This PC has " );
+		memory_text ( host, host_memory );
+		host.add ( L", " ).number ( host_physical ).add ( L" cores and " ).number ( host_logical ).add ( L" threads. Green is comfortable." );
+		gpu.text ( host.text ( ), render::FONT_SMALL, rect { control_x, y - 4.0f, inner - label_column, 18.0f }, colors.faint, render::ALIGN_LEFT );
+
+		return y + 22.0f;
+
+	}
+
+	float manager::paint_pc_storage ( render::gpu& gpu, const theme& colors, float x, float y, float inner, bool enabled, bool creating ) {
+
+		static const wchar_t* const disk_labels [ 3 ] = { L"New disk", L"Existing\x2026", L"None" };
+		float control_x = x + label_column;
+		float track = inner - label_column - 96.0f;
+
+		y = file_row ( gpu, colors, x, y, inner, L"CD/DVD", form.iso, ACTION_PICK_ISO, ACTION_EJECT, 2, enabled, L"No ISO image" );
+
+		if ( !creating )
+			return file_row ( gpu, colors, x, y, inner, L"Hard disk", form.disk, ACTION_PICK_DISK, ACTION_EJECT, 3, enabled, L"None" );
+
+		gpu.text ( L"Hard disk", render::FONT_BODY, rect { x, y, label_column, control_height }, enabled ? colors.muted : colors.faint, render::ALIGN_LEFT );
+		segmented ( gpu, colors, rect { control_x, y, inner - label_column, control_height }, disk_labels, 3, form.disk_mode, ACTION_DISK_MODE, enabled );
+		y += control_height + 10.0f;
+
+		if ( form.disk_mode == 0 ) {
+
+			base::writer size;
+
+			size.number ( form.disk_gb ).add ( L" GB" );
+			gpu.text ( L"Size", render::FONT_BODY, rect { x, y, label_column, control_height }, enabled ? colors.muted : colors.faint, render::ALIGN_LEFT );
+			slider ( gpu, colors, rect { control_x + 8.0f, y, track - 16.0f, control_height }, 2, enabled );
+			gpu.text ( size.text ( ), render::FONT_STRONG, rect { control_x + track, y, 96.0f, control_height }, colors.text, render::ALIGN_RIGHT );
+			y += control_height + 6.0f;
+			gpu.text ( L"Created instantly. It only takes space on your drive as it fills up.", render::FONT_SMALL, rect { control_x, y - 4.0f, inner - label_column, 18.0f }, colors.faint, render::ALIGN_LEFT );
+			y += 18.0f;
+
+		} else if ( form.disk_mode == 1 ) {
+
+			gpu.text ( form.disk [ 0 ] ? form.disk : L"No disk chosen", render::FONT_SMALL, rect { control_x, y - 4.0f, inner - label_column, 18.0f }, colors.muted, render::ALIGN_LEFT );
+			y += 18.0f;
+
+		}
+
+		return y;
 
 	}
 
 	void manager::paint_sheet ( render::gpu& gpu, const theme& colors, const manager_view& state, double now ) {
 
 		bool remove = shown == SHEET_REMOVE;
-		float sheet_width = remove ? 460.0f : 540.0f;
-		float content = remove ? 60.0f : 54.0f + 180.0f;
+		bool settings = shown == SHEET_SETTINGS;
+		bool enabled = editing ( );
+		float sheet_width = remove ? 460.0f : ( settings ? 700.0f : 600.0f );
+		float content = 60.0f;
+		int32_t rows = ( state.preset_count + 1 ) / 2;
 
-		if ( shown == SHEET_NEW )
-			content += static_cast < float > ( state.preset_count ) * 46.0f + 2.0f + 18.0f;
-		else if ( shown == SHEET_SETTINGS && subject_running )
-			content += 44.0f;
+		if ( shown == SHEET_NEW ) {
+
+			content = 54.0f + static_cast < float > ( rows ) * 36.0f + 30.0f;
+
+			if ( form.modern ) {
+
+				content += 40.0f + 40.0f + 40.0f + 22.0f + 40.0f;
+				content += form.disk_mode == 0 ? 40.0f + 18.0f : ( form.disk_mode == 1 ? 18.0f : 0.0f );
+
+			} else
+				content += 40.0f + 66.0f + 80.0f;
+
+		} else if ( settings )
+			content = 250.0f + ( subject_running ? 44.0f : 0.0f );
 
 		float sheet_height = 56.0f + content + 12.0f + 56.0f;
 		rect card = { math::round ( ( width - sheet_width ) * 0.5f ), math::round ( base::max ( ( height - sheet_height ) * 0.5f, 12.0f ) + ( 1.0f - sheet_amount ) * 6.0f ), sheet_width, sheet_height };
@@ -1019,14 +1384,12 @@ namespace ui {
 			title.add ( L"Remove \x201C" ).add ( subject ).add ( L"\x201D?" );
 			gpu.text ( title.text ( ), render::FONT_TITLE, rect { x, card.y + 18.0f, inner, 24.0f }, colors.text, render::ALIGN_LEFT );
 
-			if ( subject_running ) {
-
+			if ( subject_running )
 				gpu.text ( L"The machine is running. Close its window first.", render::FONT_BODY, rect { x, y, inner, 20.0f }, colors.muted, render::ALIGN_LEFT );
-
-			} else {
+			else {
 
 				gpu.text ( L"Removing it from the list keeps its folder and files.", render::FONT_BODY, rect { x, y, inner, 20.0f }, colors.muted, render::ALIGN_LEFT );
-				gpu.text ( L"Deleting moves the whole folder to the Recycle Bin.", render::FONT_BODY, rect { x, y + 22.0f, inner, 20.0f }, colors.muted, render::ALIGN_LEFT );
+				gpu.text ( L"Deleting erases it and its hard disk for good. ISOs and floppies stay.", render::FONT_BODY, rect { x, y + 22.0f, inner, 20.0f }, colors.muted, render::ALIGN_LEFT );
 
 			}
 
@@ -1039,22 +1402,86 @@ namespace ui {
 
 		}
 
-		bool enabled = editing ( );
+		gpu.text ( settings ? L"Machine settings" : L"New machine", render::FONT_TITLE, rect { x, card.y + 18.0f, inner, 24.0f }, colors.text, render::ALIGN_LEFT );
 
-		gpu.text ( shown == SHEET_NEW ? L"New machine" : L"Machine settings", render::FONT_TITLE, rect { x, card.y + 18.0f, inner, 24.0f }, colors.text, render::ALIGN_LEFT );
+		if ( settings ) {
 
-		if ( shown == SHEET_SETTINGS && subject_running ) {
+			static const wchar_t* const pages [ 3 ] = { L"General", L"System", L"Storage" };
+			float nav = 150.0f;
 
-			rect notice = { x, y, inner, 32.0f };
+			gpu.fill ( rect { card.x + nav, card.y + 56.0f, 1.0f, footer - card.y - 56.0f }, 0.0f, colors.divider );
 
-			gpu.fill ( notice, corner, fade ( colors.accent, 0.1f ) );
-			gpu.fill ( rect { notice.x, notice.y, 3.0f, notice.h }, 1.5f, colors.accent );
-			gpu.text ( L"The machine is running. Close its window to change these settings.", render::FONT_SMALL, rect { x + 14.0f, y, inner - 24.0f, 32.0f }, colors.text, render::ALIGN_LEFT );
-			y += 44.0f;
+			for ( int32_t i = 0; i < 3; i++ ) {
+
+				rect item = { card.x + 8.0f, card.y + 56.0f + static_cast < float > ( i ) * 34.0f, nav - 16.0f, 30.0f };
+
+				if ( i == category ) {
+
+					gpu.fill ( item, corner, colors.inset );
+					gpu.fill ( rect { item.x, item.y + 8.0f, 3.0f, item.h - 16.0f }, 1.5f, colors.accent );
+
+				} else if ( glow ( ACTION_CATEGORY, i ) > 0.01f )
+					gpu.fill ( item, corner, fade ( colors.hover, glow ( ACTION_CATEGORY, i ) ) );
+
+				gpu.text ( pages [ i ], i == category ? render::FONT_STRONG : render::FONT_BODY, rect { item.x + 14.0f, item.y, item.w - 20.0f, item.h }, i == category ? colors.text : colors.muted, render::ALIGN_LEFT );
+				add_hit ( item, ACTION_CATEGORY, i );
+
+			}
+
+			x = card.x + nav + 24.0f;
+			inner = card.right ( ) - 24.0f - x;
+
+			if ( subject_running ) {
+
+				rect notice = { x, y, inner, 32.0f };
+
+				gpu.fill ( notice, corner, fade ( colors.accent, 0.1f ) );
+				gpu.fill ( rect { notice.x, notice.y, 3.0f, notice.h }, 1.5f, colors.accent );
+				gpu.text ( L"The machine is running. Close its window to change these settings.", render::FONT_SMALL, rect { x + 14.0f, y, inner - 24.0f, 32.0f }, colors.text, render::ALIGN_LEFT );
+				y += 44.0f;
+
+			}
+
+			if ( category == 0 ) {
+
+				gpu.text ( L"Name", render::FONT_BODY, rect { x, y, label_column, control_height }, enabled ? colors.muted : colors.faint, render::ALIGN_LEFT );
+				field ( gpu, colors, rect { x + label_column, y, inner - label_column, control_height }, now );
+				y += control_height;
+
+				if ( form.name.length && !name_valid ( ) )
+					gpu.text ( L"Names can't end with a space or dot, or use \\ / : * ? \" < > |", render::FONT_SMALL, rect { x + label_column, y + 4.0f, inner - label_column, 16.0f }, colors.danger, render::ALIGN_LEFT );
+
+				y += 34.0f;
+
+				if ( form.preset >= 0 && form.preset < state.preset_count ) {
+
+					gpu.text ( L"Type", render::FONT_BODY, rect { x, y, label_column, 20.0f }, colors.muted, render::ALIGN_LEFT );
+					gpu.text ( state.presets [ form.preset ].label, render::FONT_BODY, rect { x + label_column, y, inner - label_column, 20.0f }, colors.text, render::ALIGN_LEFT );
+					gpu.text ( state.presets [ form.preset ].detail, render::FONT_SMALL, rect { x + label_column, y + 20.0f, inner - label_column, 18.0f }, colors.faint, render::ALIGN_LEFT );
+
+				}
+
+			} else if ( category == 1 ) {
+
+				if ( form.modern )
+					paint_pc_system ( gpu, colors, x, y, inner, enabled, true );
+				else
+					paint_xt_system ( gpu, colors, x, y, inner, enabled );
+
+			} else if ( form.modern )
+				paint_pc_storage ( gpu, colors, x, y, inner, enabled, false );
+			else
+				paint_xt_storage ( gpu, colors, x, y, inner, enabled );
+
+			button ( gpu, colors, rect { card.right ( ) - 20.0f - 80.0f, buttons, 80.0f, control_height }, L"Save", ACTION_SAVE, 0, enabled && name_valid ( ) );
+			button ( gpu, colors, rect { card.right ( ) - 20.0f - 80.0f - 8.0f - 80.0f, buttons, 80.0f, control_height }, L"Cancel", ACTION_CANCEL, 1, true );
+			gpu.opacity = 1.0f;
+
+			return;
 
 		}
 
-		gpu.text ( L"Name", render::FONT_BODY, rect { x, y, label_column, control_height }, enabled ? colors.muted : colors.faint, render::ALIGN_LEFT );
+		gpu.text ( L"Name", render::FONT_BODY, rect { x, y, label_column, control_height }, colors.muted, render::ALIGN_LEFT );
 		field ( gpu, colors, rect { x + label_column, y, inner - label_column, control_height }, now );
 		y += control_height;
 
@@ -1062,58 +1489,53 @@ namespace ui {
 			gpu.text ( L"Names can't end with a space or dot, or use \\ / : * ? \" < > |", render::FONT_SMALL, rect { x + label_column, y + 4.0f, inner - label_column, 16.0f }, colors.danger, render::ALIGN_LEFT );
 
 		y += 24.0f;
+		gpu.text ( L"Type", render::FONT_BODY, rect { x, y, label_column, 34.0f }, colors.muted, render::ALIGN_LEFT );
 
-		if ( shown == SHEET_NEW ) {
+		float column = ( inner - label_column - 8.0f ) * 0.5f;
 
-			rect group = { x + label_column, y, inner - label_column, static_cast < float > ( state.preset_count ) * 46.0f + 2.0f };
+		for ( int32_t i = 0; i < state.preset_count; i++ ) {
 
-			gpu.text ( L"Type", render::FONT_BODY, rect { x, y, label_column, 46.0f }, colors.muted, render::ALIGN_LEFT );
-			gpu.fill ( group, corner, colors.inset );
-			gpu.stroke ( group, corner, 1.0f, colors.divider );
+			const preset_card& item = state.presets [ i ];
+			rect option = { x + label_column + static_cast < float > ( i % 2 ) * ( column + 8.0f ), y + static_cast < float > ( i / 2 ) * 36.0f, column, 32.0f };
+			bool chosen = form.preset == i;
 
-			for ( int32_t i = 0; i < state.preset_count; i++ ) {
+			gpu.fill ( option, corner, chosen ? fade ( colors.accent, 0.1f ) : colors.inset );
+			gpu.stroke ( option, corner, 1.0f, chosen ? colors.accent : colors.divider );
 
-				const preset_card& item = state.presets [ i ];
-				rect option = { group.x + 1.0f, group.y + 1.0f + static_cast < float > ( i ) * 46.0f, group.w - 2.0f, 46.0f };
-				bool chosen = form.preset == i;
+			if ( !chosen && glow ( ACTION_PRESET, i ) > 0.01f )
+				gpu.fill ( option, corner, fade ( colors.hover, glow ( ACTION_PRESET, i ) ) );
 
-				if ( i )
-					gpu.fill ( rect { option.x, option.y, option.w, 1.0f }, 0.0f, colors.divider );
+			gpu.ring ( option.x + 16.0f, option.y + 16.0f, 6.0f, 1.2f, chosen ? colors.accent : colors.muted );
 
-				if ( glow ( ACTION_PRESET, i ) > 0.01f )
-					gpu.fill ( option, corner - 1.0f, fade ( colors.hover, glow ( ACTION_PRESET, i ) ) );
+			if ( chosen )
+				gpu.circle ( option.x + 16.0f, option.y + 16.0f, 3.0f, colors.accent );
 
-				gpu.ring ( option.x + 18.0f, option.y + 23.0f, 7.0f, 1.2f, chosen ? colors.accent : colors.muted );
-
-				if ( chosen )
-					gpu.circle ( option.x + 18.0f, option.y + 23.0f, 3.6f, colors.accent );
-
-				gpu.text ( item.label, render::FONT_BODY, rect { option.x + 36.0f, option.y + 5.0f, option.w - 46.0f, 18.0f }, colors.text, render::ALIGN_LEFT );
-				gpu.text ( item.detail, render::FONT_SMALL, rect { option.x + 36.0f, option.y + 23.0f, option.w - 46.0f, 16.0f }, colors.muted, render::ALIGN_LEFT );
-				add_hit ( option, ACTION_PRESET, i );
-
-			}
-
-			y = group.bottom ( ) + 18.0f;
+			gpu.text ( item.label, render::FONT_BODY, rect { option.x + 30.0f, option.y, option.w - 38.0f, option.h }, colors.text, render::ALIGN_LEFT );
+			add_hit ( option, ACTION_PRESET, i );
 
 		}
 
-		paint_machine_fields ( gpu, colors, x, y, inner, enabled );
+		y += static_cast < float > ( rows ) * 36.0f;
 
-		float primary = shown == SHEET_NEW ? 88.0f : 80.0f;
+		if ( form.preset >= 0 && form.preset < state.preset_count )
+			gpu.text ( state.presets [ form.preset ].detail, render::FONT_SMALL, rect { x + label_column, y, inner - label_column, 18.0f }, colors.faint, render::ALIGN_LEFT );
 
-		if ( shown == SHEET_NEW ) {
+		y += 30.0f;
 
-			base::writer place;
+		if ( form.modern ) {
 
-			place.add ( L"Saved in " ).add ( state.location );
-			gpu.text ( place.text ( ), render::FONT_SMALL, rect { x, buttons, inner - primary - 8.0f - 80.0f - 16.0f, control_height }, colors.faint, render::ALIGN_LEFT );
-			button ( gpu, colors, rect { card.right ( ) - 20.0f - primary, buttons, primary, control_height }, L"Create", ACTION_CREATE, 0, name_valid ( ) );
+			y = paint_pc_storage ( gpu, colors, x, y, inner, true, true );
+			paint_pc_system ( gpu, colors, x, y, inner, true, false );
 
 		} else
-			button ( gpu, colors, rect { card.right ( ) - 20.0f - primary, buttons, primary, control_height }, L"Save", ACTION_SAVE, 0, enabled && name_valid ( ) );
+			paint_machine_fields ( gpu, colors, x, y, inner, true );
 
-		button ( gpu, colors, rect { card.right ( ) - 20.0f - primary - 8.0f - 80.0f, buttons, 80.0f, control_height }, L"Cancel", ACTION_CANCEL, 1, true );
+		base::writer place;
+
+		place.add ( L"Saved in " ).add ( state.location );
+		gpu.text ( place.text ( ), render::FONT_SMALL, rect { x, buttons, inner - 88.0f - 8.0f - 80.0f - 16.0f, control_height }, colors.faint, render::ALIGN_LEFT );
+		button ( gpu, colors, rect { card.right ( ) - 20.0f - 88.0f, buttons, 88.0f, control_height }, L"Create", ACTION_CREATE, 0, name_valid ( ) && ( !form.modern || form.disk_mode != 1 || form.disk [ 0 ] ) );
+		button ( gpu, colors, rect { card.right ( ) - 20.0f - 88.0f - 8.0f - 80.0f, buttons, 80.0f, control_height }, L"Cancel", ACTION_CANCEL, 1, true );
 		gpu.opacity = 1.0f;
 
 	}

@@ -32,6 +32,8 @@ namespace tests {
 
 	void hypervisor_tests ( );
 
+	void chipset_tests ( );
+
 	int32_t foundation_tests ( );
 
 	int32_t single_step_suite ( const wchar_t* folder, const wchar_t* only, bool exact, bool timing );

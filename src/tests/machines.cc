@@ -90,7 +90,9 @@ namespace tests {
 			&& rejected ( "coldboot=2\nname=Box\n", "newer Coldboot" )
 			&& rejected ( "coldboot=1\nname=Box\nmemory=abc\n", "line 3" )
 			&& rejected ( "coldboot=1\nname=Box\nmemory=650\n", "steps of 16" )
-			&& rejected ( "coldboot=1\nname=Box\nmachine=pc\n", "machine type" )
+			&& rejected ( "coldboot=1\nname=Box\nmachine=mainframe\n", "machine type" )
+			&& rejected ( "coldboot=1\nname=Box\nmachine=pc\nprocessors=65\n", "1 to 64" )
+			&& rejected ( "coldboot=1\nname=Box\nmachine=pc\nboot=floppy\n", "cd or disk" )
 			&& rejected ( "coldboot=1\nname=CON\n", "folder name" )
 			&& rejected ( "coldboot=1\nname=a/b\n", "folder name" )
 			&& rejected ( "coldboot=1\nmemory=512\n", "no name" )
@@ -163,6 +165,97 @@ namespace tests {
 		bool refused = !vm::read_preview ( scratch.text ( ), back, across, down ) && across == 0;
 
 		expect ( round && refused, "machines: screen previews round-trip and truncated ones are refused" );
+
+		vm::config* modern = new vm::config ( );
+		vm::config* modern_copy = new vm::config ( );
+		base::list < char > modern_text;
+
+		copy_wide ( modern->name, L"Windows box", vm::name_room );
+		copy_wide ( modern->iso, L"D:\\Images\\Win11_24H2_English_x64.iso", MAX_PATH );
+		copy_wide ( modern->disk, L"C:\\VMs\\Windows box\\Windows box.img", MAX_PATH );
+
+		for ( int32_t i = 0; "windows11" [ i ]; i++ ) {
+
+			modern->os [ i ] = "windows11" [ i ];
+			modern->os [ i + 1 ] = 0;
+
+		}
+
+		modern->machine = vm::MACHINE_PC;
+		modern->memory_mb = 8192;
+		modern->processors = 4;
+		modern->cap = 80;
+		modern->disk_first = true;
+		vm::serialize ( *modern, modern_text );
+
+		bool modern_parsed = vm::parse ( modern_text.data ( ), modern_text.count ( ), *modern_copy, error, sizeof ( error ) );
+
+		expect ( modern_parsed && modern_copy->machine == vm::MACHINE_PC && modern_copy->memory_mb == 8192 && modern_copy->processors == 4 && modern_copy->cap == 80 && modern_copy->disk_first && base::same_text ( modern_copy->iso, modern->iso ) && base::same_text ( modern_copy->disk, modern->disk ), "machines: a modern PC keeps its memory, processors, CPU cap, boot order, ISO and disk" );
+
+		const vm::preset* windows = vm::detect_image ( L"D:\\x\\Win11_24H2_English_x64.iso" );
+		const vm::preset* older = vm::detect_image ( L"D:\\x\\Win10_22H2_English_x64.iso" );
+		const vm::preset* ubuntu = vm::detect_image ( L"D:\\x\\ubuntu-24.04.1-desktop-amd64.iso" );
+		const vm::preset* other = vm::detect_image ( L"D:\\x\\tools.iso" );
+
+		expect ( windows && base::same_text ( windows->id, "windows11" ) && older && base::same_text ( older->id, "windows10" ) && ubuntu && base::same_text ( ubuntu->id, "ubuntu" ) && other && base::same_text ( other->id, "pc" ), "machines: dropped ISOs are recognised as Windows 11, Windows 10, Ubuntu or a plain PC" );
+
+		base::writer disk_path;
+
+		disk_path.add ( scratch.text ( ) ).add ( L"\\sparse.img" );
+
+		bool disk_made = vm::create_disk ( disk_path.text ( ), 64ull * 1024 * 1024 * 1024 );
+		WIN32_FILE_ATTRIBUTE_DATA disk_data = { };
+		DWORD allocated_high = 0;
+		DWORD allocated_low = GetCompressedFileSizeW ( disk_path.text ( ), &allocated_high );
+		bool disk_sized = GetFileAttributesExW ( disk_path.text ( ), GetFileExInfoStandard, &disk_data ) && disk_data.nFileSizeHigh == 16 && disk_data.nFileSizeLow == 0;
+
+		expect ( disk_made && disk_sized && allocated_high == 0 && allocated_low < 1024 * 1024 && !vm::create_disk ( disk_path.text ( ), 1024 ), "machines: a 64 GB disk is created instantly as a sparse file and never overwrites an existing one" );
+
+		vm::config* doomed = new vm::config ( );
+		wchar_t owned [ MAX_PATH ] = { };
+		wchar_t shared [ MAX_PATH ] = { };
+		wchar_t owned_folder [ MAX_PATH ] = { };
+		wchar_t shared_folder [ MAX_PATH ] = { };
+		base::writer outside;
+		base::writer kept;
+
+		outside.add ( scratch.text ( ) ).add ( L"\\outside.img" );
+		files::write ( outside.text ( ), "disk", 4 );
+		copy_wide ( doomed->name, L"Doomed", vm::name_room );
+		copy_wide ( doomed->iso, outside.text ( ), MAX_PATH );
+		doomed->machine = vm::MACHINE_PC;
+
+		bool built = shelf->create ( *doomed, machines.text ( ), owned, error, sizeof ( error ), 1024 * 1024 );
+
+		copy_wide ( doomed->disk, outside.text ( ), MAX_PATH );
+		built = built && shelf->create ( *doomed, machines.text ( ), shared, error, sizeof ( error ) );
+		vm::folder_of ( owned, owned_folder );
+		vm::folder_of ( shared, shared_folder );
+		vm::write_preview ( owned_folder, pixels, 3, 2 );
+		kept.add ( shared_folder ).add ( L"\\notes.txt" );
+		files::write ( kept.text ( ), "mine", 4 );
+
+		vm::config* owned_settings = new vm::config ( );
+		bool owned_loaded = vm::load ( owned, *owned_settings, error, sizeof ( error ) );
+		wchar_t owned_disk [ MAX_PATH ];
+
+		copy_wide ( owned_disk, owned_settings->disk, MAX_PATH );
+
+		bool erased = owned_loaded && owned_disk [ 0 ] && vm::erase ( owned, owned_settings ) && vm::erase ( shared, doomed );
+		bool gone = GetFileAttributesW ( owned ) == INVALID_FILE_ATTRIBUTES && GetFileAttributesW ( owned_disk ) == INVALID_FILE_ATTRIBUTES && GetFileAttributesW ( owned_folder ) == INVALID_FILE_ATTRIBUTES && GetFileAttributesW ( shared ) == INVALID_FILE_ATTRIBUTES;
+		bool spared = GetFileAttributesW ( outside.text ( ) ) != INVALID_FILE_ATTRIBUTES && GetFileAttributesW ( kept.text ( ) ) != INVALID_FILE_ATTRIBUTES && GetFileAttributesW ( machines.text ( ) ) != INVALID_FILE_ATTRIBUTES;
+
+		expect ( built && erased && gone && spared, "machines: deleting erases the machine file, preview, own disk and empty folder but never ISOs, outside disks or other files" );
+
+		delete doomed;
+		delete owned_settings;
+
+		vm::host_info host = vm::read_host ( );
+
+		expect ( host.memory_mb >= 1024 && host.logical >= host.physical && host.physical >= 1, "machines: the host's memory and core counts are read for the sliders" );
+
+		delete modern;
+		delete modern_copy;
 
 		remove_tree ( scratch.text ( ) );
 

@@ -1,7 +1,6 @@
 #include "vm/library.hh"
 #include "base/files.hh"
 #include <shlobj.h>
-#include <shellapi.h>
 
 namespace vm {
 
@@ -168,7 +167,7 @@ namespace vm {
 
 	}
 
-	bool library::create ( const config& settings, const wchar_t* base_folder, wchar_t* out_path, char* error, int32_t room ) {
+	bool library::create ( const config& settings, const wchar_t* base_folder, wchar_t* out_path, char* error, int32_t room, uint64_t disk_bytes ) {
 
 		if ( !valid_name ( settings.name ) )
 			return report ( error, room, "Pick a name without \\ / : * ? \" < > |" );
@@ -195,16 +194,44 @@ namespace vm {
 		}
 
 		base::writer path;
+		config* stored = new config ( settings );
 
 		path.add ( folder.text ( ) ).add ( L"\\" ).add ( settings.name ).add ( L".coldboot" );
 
-		if ( !vm::save ( path.text ( ), settings ) ) {
+		if ( disk_bytes && !stored->disk [ 0 ] ) {
 
+			base::writer disk;
+
+			disk.add ( folder.text ( ) ).add ( L"\\" ).add ( settings.name ).add ( L".img" );
+
+			if ( !create_disk ( disk.text ( ), disk_bytes ) ) {
+
+				delete stored;
+				RemoveDirectoryW ( folder.text ( ) );
+
+				return report ( error, room, "Couldn't create the virtual hard disk" );
+
+			}
+
+			copy_text ( stored->disk, disk.text ( ), MAX_PATH );
+
+		}
+
+		bool written = vm::save ( path.text ( ), *stored );
+
+		if ( !written ) {
+
+			if ( disk_bytes && stored->disk [ 0 ] && !settings.disk [ 0 ] )
+				DeleteFileW ( stored->disk );
+
+			delete stored;
 			RemoveDirectoryW ( folder.text ( ) );
 
 			return report ( error, room, "Couldn't write the machine file" );
 
 		}
+
+		delete stored;
 
 		add ( path.text ( ) );
 
@@ -390,17 +417,96 @@ namespace vm {
 
 	}
 
-	bool recycle ( const wchar_t* folder ) {
+	static bool erase_file ( const wchar_t* path ) {
 
-		wchar_t from [ MAX_PATH + 2 ] = { };
-		SHFILEOPSTRUCTW operation = { };
+		SetFileAttributesW ( path, FILE_ATTRIBUTE_NORMAL );
 
-		copy_text ( from, folder, MAX_PATH );
-		operation.wFunc = FO_DELETE;
-		operation.pFrom = from;
-		operation.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI;
+		if ( DeleteFileW ( path ) )
+			return true;
 
-		return SHFileOperationW ( &operation ) == 0 && !operation.fAnyOperationsAborted;
+		DWORD reason = GetLastError ( );
+
+		return reason == ERROR_FILE_NOT_FOUND || reason == ERROR_PATH_NOT_FOUND;
+
+	}
+
+	static const wchar_t* leaf_of ( const wchar_t* path ) {
+
+		const wchar_t* leaf = path;
+
+		for ( const wchar_t* at = path; *at; at++ ) {
+
+			if ( *at == L'\\' || *at == L'/' )
+				leaf = at + 1;
+
+		}
+
+		return leaf;
+
+	}
+
+	static bool made_for ( const wchar_t* folder, const wchar_t* path ) {
+
+		static constexpr int32_t suffix = 9;
+
+		const wchar_t* leaf = leaf_of ( folder );
+		const wchar_t* file = leaf_of ( path );
+		int32_t length = base::text_length ( file ) - suffix;
+
+		if ( length <= 0 || !same_path ( file + length, L".coldboot" ) || base::text_length ( leaf ) < length || CompareStringOrdinal ( leaf, length, file, length, TRUE ) != CSTR_EQUAL )
+			return false;
+
+		if ( !leaf [ length ] )
+			return true;
+
+		if ( leaf [ length ] != L' ' || !leaf [ length + 1 ] )
+			return false;
+
+		for ( int32_t i = length + 1; leaf [ i ]; i++ ) {
+
+			if ( leaf [ i ] < L'0' || leaf [ i ] > L'9' )
+				return false;
+
+		}
+
+		return true;
+
+	}
+
+	bool erase ( const wchar_t* path, const config* settings ) {
+
+		wchar_t folder [ MAX_PATH ];
+		wchar_t owner [ MAX_PATH ];
+
+		if ( !folder_of ( path, folder ) )
+			return false;
+
+		if ( settings && settings->disk [ 0 ] && folder_of ( settings->disk, owner ) && same_path ( owner, folder ) && !erase_file ( settings->disk ) )
+			return false;
+
+		static const wchar_t* const leftovers [ ] = { L"\\preview.bin", L"\\preview.bin.new" };
+
+		for ( const wchar_t* name : leftovers ) {
+
+			base::writer extra;
+
+			extra.add ( folder ).add ( name );
+			erase_file ( extra.text ( ) );
+
+		}
+
+		base::writer staging;
+
+		staging.add ( path ).add ( L".new" );
+		erase_file ( staging.text ( ) );
+
+		if ( !erase_file ( path ) )
+			return false;
+
+		if ( made_for ( folder, path ) )
+			RemoveDirectoryW ( folder );
+
+		return true;
 
 	}
 

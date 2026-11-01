@@ -1,14 +1,159 @@
 #include "vm/config.hh"
 #include "base/files.hh"
+#include <winioctl.h>
 
 namespace vm {
 
 	static const preset preset_table [ ] = {
 
-		{ "pcxt", L"IBM PC/XT", L"8088 at 4.77 MHz, CGA, two floppy drives", L"XT", 640 },
-		{ "freedos", L"FreeDOS", L"An XT for the FreeDOS 1.3 floppy edition", L"FD", 640 },
+		{ "windows11", L"Windows 11", L"64-bit, 4 GB memory, 64 GB disk", L"W", MACHINE_PC, 4096, 2, 64 },
+		{ "windows10", L"Windows 10", L"64-bit, 4 GB memory, 50 GB disk", L"W", MACHINE_PC, 4096, 2, 50 },
+		{ "ubuntu", L"Ubuntu", L"64-bit, 4 GB memory, 25 GB disk", L"U", MACHINE_PC, 4096, 2, 25 },
+		{ "debian", L"Debian", L"64-bit, 2 GB memory, 20 GB disk", L"D", MACHINE_PC, 2048, 2, 20 },
+		{ "fedora", L"Fedora", L"64-bit, 4 GB memory, 25 GB disk", L"F", MACHINE_PC, 4096, 2, 25 },
+		{ "linux", L"Other Linux", L"64-bit, 2 GB memory, 16 GB disk", L"L", MACHINE_PC, 2048, 2, 16 },
+		{ "pc", L"Other PC", L"1 GB memory, 16 GB disk", L"PC", MACHINE_PC, 1024, 1, 16 },
+		{ "pcxt", L"IBM PC/XT", L"8088 at 4.77 MHz, CGA, two floppy drives", L"XT", MACHINE_XT, 640, 1, 0 },
+		{ "freedos", L"FreeDOS on an XT", L"For the FreeDOS 1.3 floppy edition", L"FD", MACHINE_XT, 640, 1, 0 },
 
 	};
+
+	static bool contains_text ( const wchar_t* text, const wchar_t* part ) {
+
+		for ( int32_t i = 0; text [ i ]; i++ ) {
+
+			int32_t j = 0;
+
+			while ( part [ j ] && text [ i + j ] && ( text [ i + j ] | 0x20 ) == ( part [ j ] | 0x20 ) )
+				j++;
+
+			if ( !part [ j ] )
+				return true;
+
+		}
+
+		return false;
+
+	}
+
+	const preset* detect_image ( const wchar_t* path ) {
+
+		wchar_t label [ 40 ] = { };
+		uint8_t sector [ 2048 ];
+		HANDLE file = CreateFileW ( path, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr );
+		LARGE_INTEGER at;
+		DWORD read = 0;
+
+		at.QuadPart = 0x8000;
+
+		if ( file != INVALID_HANDLE_VALUE ) {
+
+			if ( SetFilePointerEx ( file, at, nullptr, FILE_BEGIN ) && ReadFile ( file, sector, sizeof ( sector ), &read, nullptr ) && read == sizeof ( sector ) && sector [ 1 ] == 'C' && sector [ 2 ] == 'D' && sector [ 3 ] == '0' && sector [ 4 ] == '0' && sector [ 5 ] == '1' ) {
+
+				for ( int32_t i = 0; i < 32; i++ )
+					label [ i ] = sector [ 40 + i ];
+
+			}
+
+			CloseHandle ( file );
+
+		}
+
+		const wchar_t* name = path;
+
+		for ( const wchar_t* c = path; *c; c++ ) {
+
+			if ( *c == L'\\' || *c == L'/' )
+				name = c + 1;
+
+		}
+
+		auto either = [ & ] ( const wchar_t* part ) {
+
+			return contains_text ( label, part ) || contains_text ( name, part );
+
+		};
+
+		if ( either ( L"win10" ) || either ( L"windows 10" ) || either ( L"windows10" ) )
+			return find_preset ( "windows10" );
+
+		if ( either ( L"win11" ) || either ( L"windows" ) || either ( L"CCCOMA" ) || either ( L"CPBA" ) || either ( L"CCSA" ) || either ( L"CENA" ) || either ( L"SSS_X64" ) )
+			return find_preset ( "windows11" );
+
+		if ( either ( L"ubuntu" ) )
+			return find_preset ( "ubuntu" );
+
+		if ( either ( L"debian" ) )
+			return find_preset ( "debian" );
+
+		if ( either ( L"fedora" ) )
+			return find_preset ( "fedora" );
+
+		if ( either ( L"linux" ) || either ( L"arch" ) || either ( L"mint" ) || either ( L"opensuse" ) || either ( L"manjaro" ) || either ( L"kali" ) || either ( L"alpine" ) || either ( L"pop_os" ) )
+			return find_preset ( "linux" );
+
+		return find_preset ( "pc" );
+
+	}
+
+	host_info read_host ( ) {
+
+		host_info info;
+		MEMORYSTATUSEX memory = { sizeof ( MEMORYSTATUSEX ) };
+		SYSTEM_INFO system;
+		uint8_t buffer [ 8192 ];
+		DWORD size = sizeof ( buffer );
+
+		if ( GlobalMemoryStatusEx ( &memory ) )
+			info.memory_mb = static_cast < uint32_t > ( memory.ullTotalPhys / ( 1024 * 1024 ) );
+
+		GetSystemInfo ( &system );
+		info.logical = system.dwNumberOfProcessors ? system.dwNumberOfProcessors : 1;
+		info.physical = info.logical;
+
+		if ( GetLogicalProcessorInformationEx ( RelationProcessorCore, reinterpret_cast < SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX* > ( buffer ), &size ) ) {
+
+			uint32_t cores = 0;
+
+			for ( DWORD offset = 0; offset < size; ) {
+
+				const SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX* item = reinterpret_cast < const SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX* > ( buffer + offset );
+
+				cores++;
+				offset += item->Size;
+
+			}
+
+			if ( cores )
+				info.physical = cores;
+
+		}
+
+		return info;
+
+	}
+
+	bool create_disk ( const wchar_t* path, uint64_t bytes ) {
+
+		HANDLE file = CreateFileW ( path, GENERIC_READ | GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr );
+		DWORD returned = 0;
+		LARGE_INTEGER end;
+
+		if ( file == INVALID_HANDLE_VALUE )
+			return false;
+
+		end.QuadPart = static_cast < LONGLONG > ( bytes );
+
+		bool made = DeviceIoControl ( file, FSCTL_SET_SPARSE, nullptr, 0, nullptr, 0, &returned, nullptr ) && SetFilePointerEx ( file, end, nullptr, FILE_BEGIN ) && SetEndOfFile ( file );
+
+		CloseHandle ( file );
+
+		if ( !made )
+			DeleteFileW ( path );
+
+		return made;
+
+	}
 
 	const preset* presets ( int32_t& count ) {
 
@@ -298,10 +443,48 @@ namespace vm {
 
 			} else if ( key ( "machine" ) ) {
 
-				if ( !same_key ( value, value_size, "xt" ) )
+				if ( same_key ( value, value_size, "xt" ) )
+					result->machine = MACHINE_XT;
+				else if ( same_key ( value, value_size, "pc" ) )
+					result->machine = MACHINE_PC;
+				else
 					ok = fail ( error, room, line_number, "Coldboot can't run this machine type yet" );
 
-			} else if ( key ( "memory" ) ) {
+			} else if ( key ( "memory_mb" ) ) {
+
+				if ( !number ( value, value_size, amount ) || amount < 16 || amount > 1048576 )
+					ok = fail ( error, room, line_number, "memory has to be 16 MB to 1 TB" );
+				else
+					result->memory_mb = static_cast < uint32_t > ( amount );
+
+			} else if ( key ( "processors" ) ) {
+
+				if ( !number ( value, value_size, amount ) || amount < 1 || amount > 64 )
+					ok = fail ( error, room, line_number, "processors have to be 1 to 64" );
+				else
+					result->processors = static_cast < uint32_t > ( amount );
+
+			} else if ( key ( "cap" ) ) {
+
+				if ( !number ( value, value_size, amount ) || amount < 5 || amount > 100 )
+					ok = fail ( error, room, line_number, "the CPU cap has to be 5 to 100 percent" );
+				else
+					result->cap = static_cast < uint32_t > ( amount );
+
+			} else if ( key ( "boot" ) ) {
+
+				if ( same_key ( value, value_size, "disk" ) )
+					result->disk_first = true;
+				else if ( same_key ( value, value_size, "cd" ) )
+					result->disk_first = false;
+				else
+					ok = fail ( error, room, line_number, "boot has to be cd or disk" );
+
+			} else if ( key ( "iso" ) )
+				ok = path ( result->iso );
+			else if ( key ( "disk" ) )
+				ok = path ( result->disk );
+			else if ( key ( "memory" ) ) {
 
 				if ( !number ( value, value_size, amount ) || amount < 64 || amount > 640 || amount % 16 )
 					ok = fail ( error, room, line_number, "memory has to be 64 to 640 KB in steps of 16" );
@@ -473,15 +656,31 @@ namespace vm {
 		put_text ( out, "name", in.name, false );
 		put ( out, "os=" );
 		put ( out, in.os );
-		put ( out, "\nmachine=xt\n" );
-		put_number ( out, "memory", in.memory );
-		put_number ( out, "turbo", in.turbo );
-		put_number ( out, "crt", in.crt );
-		put_number ( out, "fast_floppy", in.fast_floppy );
-		put_number ( out, "custom_bios", in.custom_bios );
-		put_text ( out, "bios", in.bios, false );
-		put_text ( out, "floppy_a", in.floppies [ 0 ], false );
-		put_text ( out, "floppy_b", in.floppies [ 1 ], false );
+
+		if ( in.machine == MACHINE_PC ) {
+
+			put ( out, "\nmachine=pc\n" );
+			put_number ( out, "memory_mb", in.memory_mb );
+			put_number ( out, "processors", in.processors );
+			put_number ( out, "cap", in.cap );
+			put ( out, in.disk_first ? "boot=disk\n" : "boot=cd\n" );
+			put_text ( out, "iso", in.iso, false );
+			put_text ( out, "disk", in.disk, false );
+
+		} else {
+
+			put ( out, "\nmachine=xt\n" );
+			put_number ( out, "memory", in.memory );
+			put_number ( out, "turbo", in.turbo );
+			put_number ( out, "crt", in.crt );
+			put_number ( out, "fast_floppy", in.fast_floppy );
+			put_number ( out, "custom_bios", in.custom_bios );
+			put_text ( out, "bios", in.bios, false );
+			put_text ( out, "floppy_a", in.floppies [ 0 ], false );
+			put_text ( out, "floppy_b", in.floppies [ 1 ], false );
+
+		}
+
 		put_number ( out, "maximized", in.maximized );
 		put_number ( out, "window_x", in.window_x );
 		put_number ( out, "window_y", in.window_y );

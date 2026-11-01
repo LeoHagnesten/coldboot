@@ -9,13 +9,23 @@ namespace vm {
 	static constexpr int32_t name_room = 64;
 	static constexpr int32_t notes_room = 512;
 
+	enum machine_kind : uint8_t {
+
+		MACHINE_XT,
+		MACHINE_PC,
+
+	};
+
 	struct preset {
 
 		const char* id;
 		const wchar_t* label;
 		const wchar_t* detail;
 		const wchar_t* mark;
+		machine_kind machine;
 		uint32_t memory;
+		uint32_t processors;
+		uint32_t disk_gb;
 
 	};
 
@@ -23,11 +33,32 @@ namespace vm {
 
 	const preset* find_preset ( const char* id );
 
+	const preset* detect_image ( const wchar_t* path );
+
+	struct host_info {
+
+		uint32_t memory_mb = 0;
+		uint32_t logical = 1;
+		uint32_t physical = 1;
+
+	};
+
+	host_info read_host ( );
+
+	bool create_disk ( const wchar_t* path, uint64_t bytes );
+
 	struct config {
 
 		wchar_t name [ name_room ] = { };
 		char os [ 24 ] = "pcxt";
+		machine_kind machine = MACHINE_XT;
 		uint32_t memory = 640;
+		uint32_t memory_mb = 2048;
+		uint32_t processors = 1;
+		uint32_t cap = 100;
+		bool disk_first = false;
+		wchar_t iso [ MAX_PATH ] = { };
+		wchar_t disk [ MAX_PATH ] = { };
 		bool turbo = false;
 		bool crt = false;
 		bool fast_floppy = false;

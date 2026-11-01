@@ -23,6 +23,16 @@ namespace hv {
 
 	};
 
+	struct legacy_source {
+
+		virtual ~legacy_source ( ) = default;
+
+		virtual bool asserted ( ) = 0;
+
+		virtual uint8_t acknowledge ( ) = 0;
+
+	};
+
 	enum stop_reason : uint8_t {
 
 		STOP_NONE,
@@ -62,6 +72,8 @@ namespace hv {
 
 		bool park ( uint32_t processor );
 
+		bool virtual_wire ( uint32_t processor );
+
 		bool start ( );
 
 		void stop ( );
@@ -73,6 +85,26 @@ namespace hv {
 		void listen_eoi ( eoi_listener* target ) {
 
 			eoi_target = target;
+
+		}
+
+		void set_legacy ( legacy_source* source ) {
+
+			legacy = source;
+
+		}
+
+		void legacy_changed ( );
+
+		void lock_devices ( ) {
+
+			AcquireSRWLockExclusive ( &device_lock );
+
+		}
+
+		void unlock_devices ( ) {
+
+			ReleaseSRWLockExclusive ( &device_lock );
 
 		}
 
@@ -160,6 +192,8 @@ namespace hv {
 		volatile long pending [ max_processors ] = { };
 		uint64_t mtrrs [ max_processors ] [ 28 ] = { };
 		eoi_listener* eoi_target = nullptr;
+		legacy_source* legacy = nullptr;
+		volatile long legacy_wanted = 0;
 		uint32_t thread_count = 0;
 		volatile long quit = 0;
 		volatile long failed = 0;

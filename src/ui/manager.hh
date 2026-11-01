@@ -29,6 +29,12 @@ namespace ui {
 		ACTION_BIOS_BUILTIN,
 		ACTION_FIELD,
 		ACTION_SHEET,
+		ACTION_SLIDER,
+		ACTION_PICK_ISO,
+		ACTION_PICK_DISK,
+		ACTION_DISK_MODE,
+		ACTION_BOOT,
+		ACTION_CATEGORY,
 		ACTION_COUNT,
 
 	};
@@ -57,6 +63,13 @@ namespace ui {
 		const uint32_t* preview = nullptr;
 		int32_t preview_width = 0;
 		int32_t preview_height = 0;
+		bool modern = false;
+		uint32_t memory_mb = 0;
+		uint32_t processors = 1;
+		uint32_t cap = 100;
+		const wchar_t* iso = L"";
+		const wchar_t* disk = L"";
+		uint64_t disk_bytes = 0;
 
 	};
 
@@ -65,6 +78,10 @@ namespace ui {
 		const wchar_t* label = L"";
 		const wchar_t* detail = L"";
 		const wchar_t* mark = L"";
+		bool modern = false;
+		uint32_t memory_mb = 0;
+		uint32_t processors = 1;
+		uint32_t disk_gb = 0;
 
 	};
 
@@ -77,6 +94,9 @@ namespace ui {
 		const preset_card* presets = nullptr;
 		int32_t preset_count = 0;
 		const wchar_t* location = L"";
+		uint32_t host_memory_mb = 4096;
+		uint32_t host_logical = 1;
+		uint32_t host_physical = 1;
 
 	};
 
@@ -109,6 +129,15 @@ namespace ui {
 		wchar_t floppies [ 2 ] [ path_room ] = { };
 		bool custom_bios = false;
 		wchar_t bios [ path_room ] = { };
+		bool modern = false;
+		uint32_t memory_mb = 2048;
+		uint32_t processors = 1;
+		uint32_t cap = 100;
+		int32_t disk_mode = 0;
+		uint32_t disk_gb = 32;
+		bool disk_first = false;
+		wchar_t iso [ path_room ] = { };
+		wchar_t disk [ path_room ] = { };
 
 	};
 
@@ -145,6 +174,14 @@ namespace ui {
 		void toast ( const wchar_t* text, double now );
 
 		bool name_valid ( ) const;
+
+		void apply_preset ( int32_t index );
+
+		void set_category ( int32_t index ) {
+
+			category = index;
+
+		}
 
 		bool editing ( ) const {
 
@@ -199,6 +236,20 @@ namespace ui {
 
 		float paint_machine_fields ( render::gpu& gpu, const theme& colors, float x, float y, float inner, bool enabled );
 
+		float paint_pc_system ( render::gpu& gpu, const theme& colors, float x, float y, float inner, bool enabled, bool full );
+
+		float paint_pc_storage ( render::gpu& gpu, const theme& colors, float x, float y, float inner, bool enabled, bool creating );
+
+		float paint_xt_system ( render::gpu& gpu, const theme& colors, float x, float y, float inner, bool enabled );
+
+		float paint_xt_storage ( render::gpu& gpu, const theme& colors, float x, float y, float inner, bool enabled );
+
+		float file_row ( render::gpu& gpu, const theme& colors, float x, float y, float inner, const wchar_t* label, const wchar_t* path, manager_action browse, manager_action eject, int32_t index, bool enabled, const wchar_t* empty );
+
+		void slider ( render::gpu& gpu, const theme& colors, render::rect area, int32_t which, bool enabled );
+
+		void set_slider ( int32_t which, float x );
+
 		int32_t caret_from ( float x ) const;
 
 		hit hits [ 160 ];
@@ -224,6 +275,14 @@ namespace ui {
 		bool field_focused = false;
 		double caret_since = 0.0;
 		render::gpu* measurer = nullptr;
+		render::rect slider_areas [ 4 ];
+		int32_t dragging = -1;
+		int32_t category = 0;
+		uint32_t host_memory = 4096;
+		uint32_t host_logical = 1;
+		uint32_t host_physical = 1;
+		const preset_card* known_presets = nullptr;
+		int32_t known_count = 0;
 		wchar_t toast_text [ 96 ] = { };
 		double toast_since = -100.0;
 

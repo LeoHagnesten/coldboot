@@ -11,6 +11,8 @@ namespace app {
 		FILE_ROM,
 		FILE_STATE,
 		FILE_MACHINE,
+		FILE_IMAGE,
+		FILE_HARD_DISK,
 
 	};
 

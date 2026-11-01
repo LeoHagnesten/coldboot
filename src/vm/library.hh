@@ -25,7 +25,7 @@ namespace vm {
 
 		void remove ( int32_t index );
 
-		bool create ( const config& settings, const wchar_t* base_folder, wchar_t* out_path, char* error, int32_t room );
+		bool create ( const config& settings, const wchar_t* base_folder, wchar_t* out_path, char* error, int32_t room, uint64_t disk_bytes = 0 );
 
 		bool refresh ( int32_t index );
 
@@ -62,7 +62,7 @@ namespace vm {
 
 	HWND find_window ( const wchar_t* path );
 
-	bool recycle ( const wchar_t* folder );
+	bool erase ( const wchar_t* path, const config* settings );
 
 	bool write_preview ( const wchar_t* folder, const uint32_t* pixels, int32_t width, int32_t height );
 

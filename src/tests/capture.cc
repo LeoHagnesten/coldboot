@@ -453,7 +453,7 @@ namespace tests {
 		int32_t view_height = options.height == 860 ? 760 : options.height;
 		bool saved = false;
 		ui::machine_card cards [ 4 ];
-		ui::preset_card choices [ 8 ];
+		ui::preset_card choices [ 12 ];
 		int32_t choice_count = 0;
 		const vm::preset* table = vm::presets ( choice_count );
 
@@ -470,18 +470,29 @@ namespace tests {
 		cards [ 1 ].name = L"Mandelbrot";
 		cards [ 1 ].floppies [ 0 ] = L"C:\\code\\coldboot\\demos\\mandelbrot.asm";
 		cards [ 1 ].folder = L"C:\\Users\\you\\Documents\\Coldboot VMs\\Mandelbrot";
-		cards [ 2 ].name = L"Turbo XT";
-		cards [ 2 ].memory = 512;
-		cards [ 2 ].folder = L"C:\\Users\\you\\Documents\\Coldboot VMs\\Turbo XT";
+		cards [ 2 ].name = L"Windows 11";
+		cards [ 2 ].mark = L"W";
+		cards [ 2 ].modern = true;
+		cards [ 2 ].kind = L"Modern PC";
+		cards [ 2 ].memory_mb = 8192;
+		cards [ 2 ].processors = 4;
+		cards [ 2 ].iso = L"D:\\Images\\Win11_24H2_English_x64.iso";
+		cards [ 2 ].disk = L"C:\\Users\\you\\Documents\\Coldboot VMs\\Windows 11\\Windows 11.img";
+		cards [ 2 ].disk_bytes = 64ull << 30;
+		cards [ 2 ].folder = L"C:\\Users\\you\\Documents\\Coldboot VMs\\Windows 11";
 		cards [ 3 ].name = L"Old copy";
 		cards [ 3 ].problem = L"line 3: memory has to be 64 to 640 KB in steps of 16";
 		cards [ 3 ].folder = L"D:\\Backups\\Old copy\\Old copy.coldboot";
 
-		for ( int32_t i = 0; i < choice_count && i < 8; i++ ) {
+		for ( int32_t i = 0; i < choice_count && i < 12; i++ ) {
 
 			choices [ i ].label = table [ i ].label;
 			choices [ i ].detail = table [ i ].detail;
 			choices [ i ].mark = table [ i ].mark;
+			choices [ i ].modern = table [ i ].machine == vm::MACHINE_PC;
+			choices [ i ].memory_mb = table [ i ].memory;
+			choices [ i ].processors = table [ i ].processors;
+			choices [ i ].disk_gb = table [ i ].disk_gb;
 
 		}
 
@@ -499,8 +510,41 @@ namespace tests {
 			state.presets = choices;
 			state.preset_count = choice_count;
 			state.location = home;
+			state.host_memory_mb = 65536;
+			state.host_logical = 16;
+			state.host_physical = 8;
+			view->paint ( *gpu, state, now );
+			gpu->end ( );
 
-			if ( sheet == 1 ) {
+			if ( sheet == 4 ) {
+
+				view->apply_preset ( 0 );
+				view->form.name.set ( L"Windows 11" );
+				view->form.disk_gb = 64;
+
+				const wchar_t* image = L"D:\\Images\\Win11_24H2_English_x64.iso";
+
+				for ( int32_t i = 0; image [ i ]; i++ ) {
+
+					view->form.iso [ i ] = image [ i ];
+					view->form.iso [ i + 1 ] = 0;
+
+				}
+
+				view->open_sheet ( ui::SHEET_NEW, now );
+
+			} else if ( sheet == 5 ) {
+
+				state.selected = 2;
+				view->apply_preset ( 0 );
+				view->form.name.set ( L"Windows 11" );
+				view->form.memory_mb = 8192;
+				view->form.processors = 4;
+				view->form.cap = 80;
+				view->open_sheet ( ui::SHEET_SETTINGS, now );
+				view->set_category ( 1 );
+
+			} else if ( sheet == 1 ) {
 
 				view->form.name.set ( L"DOS games" );
 				view->form.preset = 1;
@@ -831,7 +875,7 @@ namespace tests {
 			} else if ( base::same_text ( option, L"--manager-sheet" ) ) {
 
 				i++;
-				manager_sheet = base::same_text ( value, L"new" ) ? 1 : ( base::same_text ( value, L"settings" ) ? 2 : ( base::same_text ( value, L"remove" ) ? 3 : 0 ) );
+				manager_sheet = base::same_text ( value, L"new" ) ? 1 : ( base::same_text ( value, L"settings" ) ? 2 : ( base::same_text ( value, L"remove" ) ? 3 : ( base::same_text ( value, L"image" ) ? 4 : ( base::same_text ( value, L"system" ) ? 5 : 0 ) ) ) );
 
 			} else if ( base::same_text ( option, L"--manager-empty" ) )
 				manager_empty = true;

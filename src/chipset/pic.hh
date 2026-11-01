@@ -27,6 +27,7 @@ namespace machine {
 		uint8_t isr = 0;
 		uint8_t imr = 0xFF;
 		uint8_t vector_base = 0x08;
+		uint8_t elcr = 0;
 
 	private:
 

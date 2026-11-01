@@ -267,6 +267,7 @@ namespace tests {
 		emulator_tests ( );
 		machine_file_tests ( );
 		hypervisor_tests ( );
+		chipset_tests ( );
 		print ( failure_count ( ) ? "\r\nSome tests failed.\r\n" : "\r\nAll tests passed.\r\n" );
 
 		return failure_count ( );

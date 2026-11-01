@@ -53,7 +53,7 @@ namespace machine {
 		else
 			lines = static_cast < uint8_t > ( lines & ~bit );
 
-		if ( level ) {
+		if ( level || ( elcr & bit ) ) {
 
 			irr = high ? static_cast < uint8_t > ( irr | bit ) : static_cast < uint8_t > ( irr & ~bit );
 
@@ -119,7 +119,7 @@ namespace machine {
 
 		uint8_t bit = static_cast < uint8_t > ( 1 << irq );
 
-		if ( !level )
+		if ( !level && !( elcr & bit ) )
 			irr = static_cast < uint8_t > ( irr & ~bit );
 
 		if ( auto_eoi ) {
@@ -194,7 +194,7 @@ namespace machine {
 			poll = false;
 			imr = 0;
 			isr = 0;
-			irr = level ? lines : 0;
+			irr = level ? lines : static_cast < uint8_t > ( lines & elcr );
 			lowest = 7;
 			init_step = 1;
 

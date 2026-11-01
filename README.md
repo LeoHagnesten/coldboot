@@ -36,7 +36,10 @@ Coldboot powers on into its own BIOS, which it assembles from source every time 
 
 - Coldboot opens on its machine list. **New** makes a machine in `Documents\Coldboot VMs`, each in its own folder with a `.coldboot` file you can copy, back up or add on another PC with **Add an existing machine**.
 - **Start** (or a double click) opens the machine in its own window and process, so a crash in one machine never takes down the list or the others. The list shows which machines are running, and the last screen of each one after it closes.
-- **Settings** changes the name, memory, floppies and BIOS while a machine is off. **Remove** either forgets a machine or moves its folder to the Recycle Bin.
+- Drop an `.iso` on the list and Coldboot reads its volume label, picks Windows 11, Windows 10, Ubuntu, Debian, Fedora or a plain PC, and fills in the new machine with the right amount of memory, processors and disk. Drop an `.img` to make a machine around an existing hard disk, or a `.coldboot` file to add it.
+- New modern machines get sliders for memory, processors and disk size that know your PC. Memory turns amber past half of what you have and red past 80%, and processors turn amber once they go beyond your physical cores. A new hard disk is a sparse file, so a 64 GB disk takes no space until the guest writes to it.
+- **Settings** has General, System and Storage pages for the name, memory, processors, a CPU cap, the boot order, the ISO, the hard disk, floppies and BIOS, all editable while a machine is off. **Remove** either forgets a machine or deletes it for good, along with the hard disk in its folder. ISOs, floppies and anything else you put in the folder are left alone.
+- Modern PCs can be made and configured now, but their firmware is still being written, so only XT machines start for the moment.
 - A machine window starts powered on. Drop a floppy image anywhere on it to put it in drive A, or hold Shift for drive B.
 - Drop an `.asm` file the same way to boot it. Programs start at `org 0x7C00`, and anything that fits in one sector gets its boot signature added for you. A key press in the Mandelbrot demo cycles the CGA palettes.
 - Press Esc while POST shows the hint to pick the boot drive.
@@ -70,7 +73,7 @@ Coldboot.exe --smoke <folder> [<image> | --vm <machine file>]
 Coldboot.exe --smoke-manager <folder>
 ```
 
-- `--test` runs 136 checks across the CPU, the chips, the floppy controller, the assembler, disk images, the BIOS, save states, the x86-64 instruction emulator and the hypervisor engine. The hypervisor checks are skipped on PCs without the Windows Hypervisor Platform.
+- `--test` runs 154 checks across the CPU, the chips, the floppy controller, the assembler, disk images, the BIOS, save states, the x86-64 instruction emulator, the hypervisor engine and the modern PC chipset. The hypervisor checks are skipped on PCs without the Windows Hypervisor Platform.
 - `--cpu` runs SingleStepTests. It also takes `--only <prefix>`, `--exact` and `--timing`.
 - `--own` boots the built-in BIOS and works through the steps in order. `--a` and `--b` take `.asm` files too:
   - `--run <seconds>` runs emulated time
@@ -80,7 +83,7 @@ Coldboot.exe --smoke-manager <folder>
   - `--where`, `--hunt` and `--trail` show where the CPU is and catch it running into empty memory
   - `--asm` assembles the BIOS and reports errors as `file.asm:line`
 - `--smoke` starts a machine window hidden with the sound off and your settings left alone. It boots, opens the floppy panel, saves and loads a state, and writes screenshots from the swap chain plus a short report into the folder. Add `--vm <file>` to run a machine file the same way.
-- `--smoke-manager <folder>` runs the machine list hidden against a library in that folder. It creates, edits, removes and re-adds a machine, checks the files on disk and the saved screen preview, and writes screenshots and a report.
-- `--manager <png>` (after `--own`) renders the machine list offscreen, with `--manager-sheet new`, `settings` or `remove` and `--manager-empty`.
+- `--smoke-manager <folder>` runs the machine list hidden against a library in that folder. It creates a modern PC with a 64 GB disk, edits it, removes and re-adds it, deletes it, checks the files on disk and the saved screen preview, and writes screenshots and a report.
+- `--manager <png>` (after `--own`) renders the machine list offscreen, with `--manager-sheet new`, `settings`, `remove`, `image` or `system` and `--manager-empty`.
 
 Every screenshot here came from `--own` and `--ui`.
