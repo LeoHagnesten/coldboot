@@ -288,6 +288,26 @@ namespace render {
 
 			}
 
+			case ICON_MONITOR:
+				box_line ( -10.0f, -8.0f, 20.0f, 13.0f, 1.5f );
+				segment ( 0.0f, 5.5f, 0.0f, 8.5f );
+				segment ( -5.0f, 9.0f, 5.0f, 9.0f );
+				return;
+
+			case ICON_TRASH: {
+
+				static const float can [ ] = { -6.5f, -5.0f, -5.5f, 9.0f, 5.5f, 9.0f, 6.5f, -5.0f };
+
+				segment ( -9.0f, -5.0f, 9.0f, -5.0f );
+				box_line ( -3.0f, -8.5f, 6.0f, 3.5f, 1.0f );
+				poly ( can, 4, false );
+				segment ( -2.0f, -1.5f, -2.0f, 5.5f );
+				segment ( 2.0f, -1.5f, 2.0f, 5.5f );
+
+				return;
+
+			}
+
 			default:
 				return;
 

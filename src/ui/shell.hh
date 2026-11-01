@@ -91,6 +91,7 @@ namespace ui {
 		drive_view drives [ 2 ];
 		const wchar_t* bios_name = L"";
 		const wchar_t* problem = L"";
+		const wchar_t* title = L"Coldboot";
 
 	};
 

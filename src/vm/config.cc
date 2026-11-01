@@ -5,8 +5,8 @@ namespace vm {
 
 	static const preset preset_table [ ] = {
 
-		{ "pcxt", L"IBM PC/XT", L"An empty XT with an 8088 at 4.77 MHz, CGA and two floppy drives", L"XT", 640 },
-		{ "freedos", L"FreeDOS", L"An XT set up for the FreeDOS 1.3 floppy edition", L"FD", 640 },
+		{ "pcxt", L"IBM PC/XT", L"8088 at 4.77 MHz, CGA, two floppy drives", L"XT", 640 },
+		{ "freedos", L"FreeDOS", L"An XT for the FreeDOS 1.3 floppy edition", L"FD", 640 },
 
 	};
 

@@ -302,6 +302,8 @@ namespace render {
 			{ face, DWRITE_FONT_WEIGHT_SEMI_BOLD, 15.0f },
 			{ face, DWRITE_FONT_WEIGHT_SEMI_BOLD, 22.0f },
 			{ mono, DWRITE_FONT_WEIGHT_NORMAL, 12.0f },
+			{ face, DWRITE_FONT_WEIGHT_SEMI_BOLD, 11.0f },
+			{ face, DWRITE_FONT_WEIGHT_SEMI_BOLD, 18.0f },
 
 		};
 

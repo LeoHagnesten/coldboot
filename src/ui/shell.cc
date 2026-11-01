@@ -223,10 +223,10 @@ namespace ui {
 		float amount = glows [ id ];
 
 		if ( active )
-			gpu.fill ( area, 9.0f, fade ( colors.accent, 0.16f ) );
+			gpu.fill ( area, corner, fade ( colors.accent, 0.16f ) );
 
 		if ( enabled && amount > 0.01f )
-			gpu.fill ( area, 9.0f, fade ( pressed == id ? colors.pressed : colors.hover, amount ) );
+			gpu.fill ( area, corner, fade ( pressed == id ? colors.pressed : colors.hover, amount ) );
 
 		gpu.icon ( icon, area.x + area.w * 0.5f, area.y + area.h * 0.5f, 18.0f, enabled ? ( active ? colors.accent : tint ) : colors.faint );
 
@@ -239,7 +239,8 @@ namespace ui {
 
 	void shell::segmented ( render::gpu& gpu, const theme& colors, rect area, const control* ids, const wchar_t* const* labels, int32_t count, int32_t selected ) {
 
-		gpu.fill ( area, 8.0f, colors.inset );
+		gpu.fill ( area, corner, colors.inset );
+		gpu.stroke ( area, corner, 1.0f, colors.divider );
 
 		float part = ( area.w - 4.0f ) / static_cast < float > ( count );
 
@@ -249,11 +250,11 @@ namespace ui {
 
 			if ( i == selected ) {
 
-				gpu.fill ( segment, 6.0f, colors.raised );
-				gpu.stroke ( segment, 6.0f, 1.0f, colors.divider );
+				gpu.fill ( segment, corner - 1.0f, colors.raised );
+				gpu.stroke ( segment, corner - 1.0f, 1.0f, colors.divider );
 
 			} else if ( glows [ ids [ i ] ] > 0.01f )
-				gpu.fill ( segment, 6.0f, fade ( colors.hover, glows [ ids [ i ] ] ) );
+				gpu.fill ( segment, corner - 1.0f, fade ( colors.hover, glows [ ids [ i ] ] ) );
 
 			gpu.text ( labels [ i ], i == selected ? render::FONT_SMALL_STRONG : render::FONT_SMALL, segment, i == selected ? colors.text : colors.muted, render::ALIGN_CENTER );
 			add_hit ( segment, ids [ i ] );
@@ -298,9 +299,9 @@ namespace ui {
 			panel.y -= lift;
 			popover_area = panel;
 			gpu.opacity = popover_amount;
-			gpu.shadow ( panel, 14.0f, 18.0f, colors.shadow );
-			gpu.fill ( panel, 14.0f, colors.raised );
-			gpu.stroke ( panel, 14.0f, 1.0f, colors.divider );
+			gpu.shadow ( panel, corner_large, 16.0f, colors.shadow );
+			gpu.fill ( panel, corner_large, colors.raised );
+			gpu.stroke ( panel, corner_large, 1.0f, colors.divider );
 			add_hit ( panel, CONTROL_NONE );
 
 			if ( disks )
@@ -321,9 +322,9 @@ namespace ui {
 			rect pill = { math::round ( ( width - text_width - 36.0f ) * 0.5f ), full ? height - 64.0f : height - status - 54.0f, text_width + 36.0f, 34.0f };
 
 			gpu.opacity = alpha;
-			gpu.shadow ( pill, 17.0f, 10.0f, colors.shadow );
-			gpu.fill ( pill, 17.0f, colors.raised );
-			gpu.stroke ( pill, 17.0f, 1.0f, colors.divider );
+			gpu.shadow ( pill, corner, 10.0f, colors.shadow );
+			gpu.fill ( pill, corner, colors.raised );
+			gpu.stroke ( pill, corner, 1.0f, colors.divider );
 			gpu.text ( toast_text, render::FONT_BODY, pill, colors.text, render::ALIGN_CENTER );
 			gpu.opacity = 1.0f;
 
@@ -391,16 +392,16 @@ namespace ui {
 		float amount = glows [ CONTROL_SPEED ];
 
 		anchors [ CONTROL_SPEED ] = pill;
-		gpu.fill ( pill, 8.0f, state.turbo ? fade ( colors.accent, 0.18f ) : colors.inset );
+		gpu.fill ( pill, corner, state.turbo ? fade ( colors.accent, 0.18f ) : colors.inset );
 
 		if ( amount > 0.01f )
-			gpu.fill ( pill, 8.0f, fade ( colors.hover, amount ) );
+			gpu.fill ( pill, corner, fade ( colors.hover, amount ) );
 
 		gpu.icon ( render::ICON_BOLT, pill.x + 16.0f, pill.y + pill.h * 0.5f, 14.0f, state.turbo ? colors.accent : colors.muted );
 		gpu.text ( speed_label, render::FONT_SMALL_STRONG, rect { pill.x + 28.0f, pill.y, pill.w - 34.0f, pill.h }, state.turbo ? colors.accent : colors.text, render::ALIGN_LEFT );
 		add_hit ( pill, CONTROL_SPEED );
 
-		float title_width = gpu.measure ( L"Coldboot", render::FONT_STRONG );
+		float title_width = gpu.measure ( state.title, render::FONT_STRONG );
 		base::writer detail;
 
 		detail.add ( L"IBM PC/XT  \x00B7  8088  \x00B7  " ).number ( state.memory ).add ( L" KB" );
@@ -411,7 +412,7 @@ namespace ui {
 
 		if ( center > left_end + 16.0f && center + block < pill.x - 16.0f ) {
 
-			gpu.text ( L"Coldboot", render::FONT_STRONG, rect { center, 0.0f, title_width + 2.0f, toolbar }, colors.text, render::ALIGN_LEFT );
+			gpu.text ( state.title, render::FONT_STRONG, rect { center, 0.0f, title_width + 2.0f, toolbar }, colors.text, render::ALIGN_LEFT );
 			gpu.text ( detail.text ( ), render::FONT_SMALL, rect { center + title_width + 12.0f, 0.0f, detail_width + 2.0f, toolbar }, colors.muted, render::ALIGN_LEFT );
 
 		}
@@ -450,7 +451,7 @@ namespace ui {
 			float chip_width = gpu.measure ( chip, render::FONT_MONO ) + 16.0f;
 			rect area = { x, middle - 10.0f, chip_width, 20.0f };
 
-			gpu.fill ( area, 6.0f, colors.inset );
+			gpu.fill ( area, corner, colors.inset );
 			gpu.text ( chip, render::FONT_MONO, area, colors.accent, render::ALIGN_CENTER );
 			x += chip_width + 14.0f;
 
@@ -468,7 +469,7 @@ namespace ui {
 			control id = d ? CONTROL_DRIVE_B : CONTROL_DRIVE_A;
 
 			if ( glows [ id ] > 0.01f )
-				gpu.fill ( chip, 7.0f, fade ( colors.hover, glows [ id ] ) );
+				gpu.fill ( chip, corner, fade ( colors.hover, glows [ id ] ) );
 
 			gpu.circle ( chip.x + 9.0f, middle, 3.0f, drive.light ? colors.led_red : ( drive.present ? colors.muted : colors.led_off ) );
 			gpu.text ( d ? L"B:" : L"A:", render::FONT_SMALL_STRONG, rect { chip.x + 18.0f, top, 20.0f, status }, colors.text, render::ALIGN_LEFT );
@@ -576,9 +577,9 @@ namespace ui {
 
 		tip.x = base::clamp ( tip.x, 6.0f, base::max ( width - tip.w - 6.0f, 6.0f ) );
 		gpu.opacity = alpha;
-		gpu.shadow ( tip, 7.0f, 6.0f, colors.shadow );
-		gpu.fill ( tip, 7.0f, colors.raised );
-		gpu.stroke ( tip, 7.0f, 1.0f, colors.divider );
+		gpu.shadow ( tip, corner, 6.0f, colors.shadow );
+		gpu.fill ( tip, corner, colors.raised );
+		gpu.stroke ( tip, corner, 1.0f, colors.divider );
 		gpu.text ( label, render::FONT_SMALL, tip, colors.text, render::ALIGN_CENTER );
 		gpu.opacity = 1.0f;
 

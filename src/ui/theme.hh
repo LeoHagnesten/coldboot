@@ -4,6 +4,9 @@
 
 namespace ui {
 
+	static constexpr float corner = 4.0f;
+	static constexpr float corner_large = 6.0f;
+
 	struct theme {
 
 		render::color background;
@@ -31,24 +34,24 @@ namespace ui {
 
 		return theme {
 
-			render::rgb ( 0x0E0F11 ),
-			render::rgb ( 0x15161A ),
-			render::rgb ( 0x24262C ),
-			render::rgb ( 0x1B1D21 ),
-			render::rgb ( 0x0F1013 ),
-			render::rgb ( 0xFFFFFF, 0.07f ),
-			render::rgb ( 0xFFFFFF, 0.12f ),
-			render::rgb ( 0xECEDEF ),
-			render::rgb ( 0x8D919A ),
-			render::rgb ( 0x5A5E66 ),
-			render::rgb ( 0xF0A848 ),
-			render::rgb ( 0x1B1206 ),
-			render::rgb ( 0x43D17A ),
-			render::rgb ( 0xFF5340 ),
-			render::rgb ( 0x3A3D44 ),
+			render::rgb ( 0x111214 ),
+			render::rgb ( 0x17181B ),
+			render::rgb ( 0x27292E ),
+			render::rgb ( 0x1D1F23 ),
+			render::rgb ( 0x0C0D0F ),
+			render::rgb ( 0xFFFFFF, 0.05f ),
+			render::rgb ( 0xFFFFFF, 0.09f ),
+			render::rgb ( 0xE4E5E7 ),
+			render::rgb ( 0x979AA1 ),
+			render::rgb ( 0x5F6269 ),
+			render::rgb ( 0xD99B45 ),
+			render::rgb ( 0x1A1307 ),
+			render::rgb ( 0x3FBE72 ),
+			render::rgb ( 0xF0513D ),
+			render::rgb ( 0x3A3D43 ),
 			render::rgb ( 0x050506 ),
-			render::rgb ( 0x000000, 0.55f ),
-			render::rgb ( 0xFF6B5B ),
+			render::rgb ( 0x000000, 0.5f ),
+			render::rgb ( 0xEC6656 ),
 
 		};
 
@@ -58,24 +61,24 @@ namespace ui {
 
 		return theme {
 
-			render::rgb ( 0xE6E6E2 ),
-			render::rgb ( 0xF8F8F6 ),
-			render::rgb ( 0xDCDCD7 ),
+			render::rgb ( 0xF7F7F6 ),
+			render::rgb ( 0xEEEEEC ),
+			render::rgb ( 0xDBDBD7 ),
 			render::rgb ( 0xFFFFFF ),
-			render::rgb ( 0xEEEEEB ),
-			render::rgb ( 0x000000, 0.05f ),
-			render::rgb ( 0x000000, 0.09f ),
-			render::rgb ( 0x1A1B1E ),
-			render::rgb ( 0x686B72 ),
-			render::rgb ( 0xA4A7AD ),
-			render::rgb ( 0xC57610 ),
+			render::rgb ( 0xF3F3F1 ),
+			render::rgb ( 0x000000, 0.045f ),
+			render::rgb ( 0x000000, 0.08f ),
+			render::rgb ( 0x1B1C1F ),
+			render::rgb ( 0x62656C ),
+			render::rgb ( 0xA2A5AB ),
+			render::rgb ( 0xB46B0D ),
 			render::rgb ( 0xFFFFFF ),
-			render::rgb ( 0x1FA75A ),
-			render::rgb ( 0xE5402E ),
+			render::rgb ( 0x1E9E55 ),
+			render::rgb ( 0xD9412F ),
 			render::rgb ( 0xC6C8CC ),
 			render::rgb ( 0x0A0A0B ),
-			render::rgb ( 0x000000, 0.22f ),
-			render::rgb ( 0xD9412F ),
+			render::rgb ( 0x000000, 0.16f ),
+			render::rgb ( 0xC9392A ),
 
 		};
 

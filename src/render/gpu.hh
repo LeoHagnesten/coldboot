@@ -95,6 +95,8 @@ namespace render {
 		FONT_TITLE,
 		FONT_HERO,
 		FONT_MONO,
+		FONT_CAPTION,
+		FONT_HEADING,
 		FONT_COUNT,
 
 	};
@@ -128,6 +130,8 @@ namespace render {
 		ICON_FOLDER,
 		ICON_KEYBOARD,
 		ICON_CHECK,
+		ICON_MONITOR,
+		ICON_TRASH,
 
 	};
 

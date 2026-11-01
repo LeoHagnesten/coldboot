@@ -173,15 +173,23 @@ namespace ui {
 
 		float glow ( manager_action action, int32_t index ) const;
 
-		bool button ( render::gpu& gpu, const theme& colors, render::rect area, const wchar_t* label, manager_action action, int32_t style, bool enabled, int32_t index = 0 );
+		bool button ( render::gpu& gpu, const theme& colors, render::rect area, const wchar_t* label, manager_action action, int32_t style, bool enabled, int32_t index = 0, int32_t icon = -1 );
 
-		void badge ( render::gpu& gpu, const theme& colors, render::rect area, const wchar_t* mark, bool large );
+		float tool ( render::gpu& gpu, const theme& colors, float x, const wchar_t* label, render::icon_kind icon, manager_action action, bool enabled );
 
 		void field ( render::gpu& gpu, const theme& colors, render::rect area, double now );
 
 		void segmented ( render::gpu& gpu, const theme& colors, render::rect area, const wchar_t* const* labels, int32_t count, int32_t selected, manager_action action, bool enabled );
 
+		void section ( render::gpu& gpu, const theme& colors, float x, float& y, float span, const wchar_t* title );
+
+		void property ( render::gpu& gpu, const theme& colors, float x, float& y, float span, const wchar_t* label, const wchar_t* value, bool quiet );
+
+		void paint_toolbar ( render::gpu& gpu, const theme& colors, const manager_view& state );
+
 		void paint_sidebar ( render::gpu& gpu, const theme& colors, const manager_view& state );
+
+		void paint_status ( render::gpu& gpu, const theme& colors, const manager_view& state, double now );
 
 		void paint_empty ( render::gpu& gpu, const theme& colors, render::rect pane );
 
@@ -197,7 +205,9 @@ namespace ui {
 		int32_t hit_count = 0;
 		float width = 0.0f;
 		float height = 0.0f;
-		float sidebar = 288.0f;
+		float sidebar = 264.0f;
+		float toolbar = 44.0f;
+		float status = 26.0f;
 		float scroll = 0.0f;
 		float scroll_limit = 0.0f;
 		manager_action hover_action = ACTION_NONE;

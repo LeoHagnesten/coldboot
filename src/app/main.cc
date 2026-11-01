@@ -234,6 +234,7 @@ static void render_frame ( ) {
 	state.memory = config.memory;
 	state.bios_name = config.custom_bios && config.bios [ 0 ] ? file_name ( config.bios ) : L"Coldboot BIOS";
 	state.problem = emulator->problem;
+	state.title = machine_file ? machine_file->name : L"Coldboot";
 
 	for ( int32_t d = 0; d < 2; d++ ) {
 

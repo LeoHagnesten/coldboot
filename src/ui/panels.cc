@@ -21,9 +21,9 @@ namespace ui {
 			rect card = { x, y, inner, 62.0f };
 			rect badge = { card.x + 12.0f, card.y + 17.0f, 28.0f, 28.0f };
 
-			gpu.fill ( card, 10.0f, colors.inset );
-			gpu.fill ( badge, 7.0f, colors.raised );
-			gpu.stroke ( badge, 7.0f, 1.0f, colors.divider );
+			gpu.fill ( card, corner, colors.inset );
+			gpu.fill ( badge, 3.0f, colors.raised );
+			gpu.stroke ( badge, 3.0f, 1.0f, colors.divider );
 			gpu.text ( d ? L"B" : L"A", render::FONT_STRONG, badge, colors.text, render::ALIGN_CENTER );
 
 			if ( drive.light )
@@ -77,10 +77,10 @@ namespace ui {
 
 			rect area = { x + ( pill + 8.0f ) * static_cast < float > ( i ), y, pill, 32.0f };
 
-			gpu.fill ( area, 8.0f, colors.inset );
+			gpu.fill ( area, corner, colors.inset );
 
 			if ( glow ( sizes [ i ] ) > 0.01f )
-				gpu.fill ( area, 8.0f, fade ( colors.hover, glow ( sizes [ i ] ) ) );
+				gpu.fill ( area, corner, fade ( colors.hover, glow ( sizes [ i ] ) ) );
 
 			gpu.icon ( render::ICON_PLUS, area.x + 15.0f, area.y + 16.0f, 12.0f, colors.muted );
 			gpu.text ( labels [ i ], render::FONT_SMALL, rect { area.x + 24.0f, area.y, area.w - 28.0f, area.h }, colors.text, render::ALIGN_LEFT );
