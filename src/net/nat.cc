@@ -49,6 +49,7 @@ namespace net {
 		bool fin_sent = false;
 		bool fin_acked = false;
 		bool shut = false;
+		bool local = false;
 		uint64_t sent_at = 0;
 		uint32_t retries = 0;
 
@@ -295,6 +296,13 @@ namespace net {
 
 	}
 
+	void nat::kick ( ) {
+
+		if ( wake )
+			SetEvent ( wake );
+
+	}
+
 	void nat::send ( const uint8_t* frame, uint32_t size ) {
 
 		if ( !thread || size > slot_size || size < 14 )
@@ -367,7 +375,7 @@ namespace net {
 
 			}
 
-			service ( );
+			service_all ( );
 
 		}
 
@@ -375,7 +383,7 @@ namespace net {
 
 	}
 
-	void nat::service ( ) {
+	void nat::service_all ( ) {
 
 		uint64_t now = GetTickCount64 ( );
 
@@ -563,7 +571,7 @@ namespace net {
 
 		}
 
-		if ( !icmp || icmp == INVALID_HANDLE_VALUE || destination >= 0xE0000000u )
+		if ( isolated || !icmp || icmp == INVALID_HANDLE_VALUE || destination >= 0xE0000000u )
 			return;
 
 		for ( uint32_t i = 0; i < max_echoes; i++ ) {
@@ -710,6 +718,9 @@ namespace net {
 	}
 
 	bool nat::map_target ( uint32_t address, uint16_t number, void* out, int32_t& length ) {
+
+		if ( isolated )
+			return false;
 
 		if ( address == resolver_address && number == 53 ) {
 
@@ -935,6 +946,9 @@ namespace net {
 		if ( reset && link.state != LINK_FREE )
 			tcp_reset ( link.remote, link.remote_port, guest_address, link.guest_port, link.next, link.guest_next );
 
+		if ( link.local && local )
+			local->closed ( );
+
 		if ( link.socket != INVALID_SOCKET ) {
 
 			if ( reset ) {
@@ -1007,10 +1021,54 @@ namespace net {
 			uint8_t address [ 28 ];
 			int32_t address_length = 0;
 
+			if ( destination == tools_address ) {
+
+				if ( destination_port != tools_port || !local ) {
+
+					tcp_reset ( destination, destination_port, source, source_port, 0, sequence + 1 );
+
+					return;
+
+				}
+
+				for ( uint32_t i = 0; i < max_links; i++ ) {
+
+					if ( links [ i ].state != LINK_FREE && links [ i ].local )
+						close_link ( links [ i ], true );
+
+				}
+
+			}
+
 			for ( uint32_t i = 0; i < max_links && !link; i++ ) {
 
 				if ( links [ i ].state == LINK_FREE )
 					link = &links [ i ];
+
+			}
+
+			if ( link && destination == tools_address ) {
+
+				*link = tcp_link ( );
+				link->local = true;
+				link->remote = destination;
+				link->remote_port = destination_port;
+				link->guest_port = source_port;
+				link->state = LINK_ANSWERED;
+				link->guest_next = sequence + 1;
+				link->start = sequence_seed;
+				sequence_seed += 0x01000193u;
+				link->acked = link->start;
+				link->next = link->start;
+				link->window = window;
+				link->mss = 1460;
+				link->outgoing = static_cast < uint8_t* > ( runtime_allocate ( out_capacity ) );
+				link->incoming = static_cast < uint8_t* > ( runtime_allocate ( in_capacity ) );
+				link->sent_at = GetTickCount64 ( );
+				tcp_out ( *link, TCP_SYN | TCP_ACK, link->start, nullptr, 0 );
+				local->opened ( );
+
+				return;
 
 			}
 
@@ -1180,6 +1238,23 @@ namespace net {
 
 	void nat::flush ( tcp_link& link ) {
 
+		if ( link.local ) {
+
+			if ( link.in_size && local )
+				local->received ( link.incoming, link.in_size );
+
+			link.in_size = 0;
+
+			if ( link.guest_fin )
+				link.host_eof = true;
+
+			if ( link.state == LINK_OPEN && link.offered < link.mss && advertised ( link ) >= link.mss * 2 )
+				tcp_out ( link, TCP_ACK, link.next, nullptr, 0 );
+
+			return;
+
+		}
+
 		while ( link.state != LINK_FREE && link.writable && link.in_size ) {
 
 			int sent = ::send ( link.socket, reinterpret_cast < const char* > ( link.incoming ), static_cast < int > ( link.in_size ), 0 );
@@ -1213,6 +1288,23 @@ namespace net {
 	}
 
 	void nat::fill ( tcp_link& link ) {
+
+		if ( link.local ) {
+
+			while ( local && link.state == LINK_OPEN && !link.host_eof && link.out_size < out_capacity ) {
+
+				uint32_t got = local->produce ( link.outgoing + link.out_size, out_capacity - link.out_size );
+
+				if ( !got )
+					break;
+
+				link.out_size += got;
+
+			}
+
+			return;
+
+		}
 
 		while ( link.state != LINK_FREE && link.readable && !link.host_eof && link.out_size < out_capacity ) {
 
@@ -1298,7 +1390,7 @@ namespace net {
 
 			WSANETWORKEVENTS events = { };
 
-			if ( WSAEnumNetworkEvents ( link.socket, nullptr, &events ) == 0 ) {
+			if ( !link.local && WSAEnumNetworkEvents ( link.socket, nullptr, &events ) == 0 ) {
 
 				if ( events.lNetworkEvents & FD_CONNECT ) {
 

@@ -17,6 +17,10 @@ namespace ui {
 		TOOL_SHOT,
 		TOOL_FULLSCREEN,
 		TOOL_SCREEN,
+		TOOL_FILES,
+		TOOL_TYPE,
+		TOOL_SAVE,
+		TOOL_TOOLS,
 		TOOL_COUNT,
 
 	};
@@ -39,6 +43,8 @@ namespace ui {
 		uint32_t memory_mb = 0;
 		bool disk_light = false;
 		bool disc_light = false;
+		bool can_save = false;
+		bool tools_linked = false;
 
 	};
 
@@ -83,7 +89,7 @@ namespace ui {
 
 		console_action find ( float x, float y ) const;
 
-		float tool ( render::gpu& gpu, const theme& colors, float x, const wchar_t* label, render::icon_kind icon, console_action action, bool enabled, bool accent );
+		float tool ( render::gpu& gpu, const theme& colors, float x, const wchar_t* label, render::icon_kind icon, console_action action, bool enabled, bool accent, bool compact );
 
 		void paint_toolbar ( render::gpu& gpu, const theme& colors, const console_view& state );
 

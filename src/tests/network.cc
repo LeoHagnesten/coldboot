@@ -2,8 +2,11 @@
 
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include "app/clipboard.hh"
+#include "base/files.hh"
 #include "net/nat.hh"
 #include "pc/e1000.hh"
+#include "pc/tools.hh"
 #include "tests/harness.hh"
 
 namespace tests {
@@ -482,11 +485,146 @@ namespace tests {
 
 	}
 
+	static void pump_tools ( pc::guest_tools& host, pc::guest_tools& guest ) {
+
+		uint8_t* buffer = static_cast < uint8_t* > ( runtime_allocate ( 0x10000 ) );
+
+		for ( int32_t round = 0; round < 400; round++ ) {
+
+			uint32_t a = host.produce ( buffer, 0x10000 );
+
+			if ( a )
+				guest.received ( buffer, a );
+
+			uint32_t b = guest.produce ( buffer, 0x10000 );
+
+			if ( b )
+				host.received ( buffer, b );
+
+			if ( !a && !b )
+				break;
+
+		}
+
+		runtime_release ( buffer );
+
+	}
+
+	static void tools_tests ( ) {
+
+		wchar_t clean [ 260 ];
+		bool names = pc::tools_clean_name ( L"a\\b c.txt", 9, clean, 260 ) && base::same_text ( clean, L"a\\b c.txt" ) && !pc::tools_clean_name ( L"..\\x", 4, clean, 260 ) && !pc::tools_clean_name ( L"C:\\x", 4, clean, 260 ) && !pc::tools_clean_name ( L"\\x", 2, clean, 260 ) && !pc::tools_clean_name ( L"a\\..", 4, clean, 260 ) && !pc::tools_clean_name ( L"x.txt:hidden", 12, clean, 260 );
+
+		expect ( names, "tools: received names can't climb out of the inbox, name a drive or hide in a stream" );
+
+		wchar_t temporary [ MAX_PATH ];
+		base::writer root;
+		base::writer source;
+		base::writer nested;
+		base::writer host_inbox;
+		base::writer guest_inbox;
+
+		GetTempPathW ( MAX_PATH, temporary );
+		root.add ( temporary ).add ( L"coldboot-tools-test" );
+		CreateDirectoryW ( root.text ( ), nullptr );
+		source.add ( root.text ( ) ).add ( L"\\Shared stuff" );
+		CreateDirectoryW ( source.text ( ), nullptr );
+		nested.add ( source.text ( ) ).add ( L"\\inner" );
+		CreateDirectoryW ( nested.text ( ), nullptr );
+		host_inbox.add ( root.text ( ) ).add ( L"\\host" );
+		guest_inbox.add ( root.text ( ) ).add ( L"\\guest" );
+		CreateDirectoryW ( host_inbox.text ( ), nullptr );
+		CreateDirectoryW ( guest_inbox.text ( ), nullptr );
+
+		base::writer first;
+		base::writer second;
+		char* big = static_cast < char* > ( runtime_allocate ( 200000 ) );
+
+		for ( int32_t i = 0; i < 200000; i++ )
+			big [ i ] = static_cast < char > ( i * 31 + 7 );
+
+		first.add ( source.text ( ) ).add ( L"\\note.txt" );
+		second.add ( nested.text ( ) ).add ( L"\\data.bin" );
+
+		bool staged = files::write ( first.text ( ), "hello there", 11 ) && files::write ( second.text ( ), big, 200000 );
+		pc::guest_tools* host = new pc::guest_tools ( );
+		pc::guest_tools* guest = new pc::guest_tools ( );
+		pc::tools_event item;
+
+		guest->agent = true;
+		host->set_policy ( pc::SHARE_TEXT_IN | pc::SHARE_FILES_IN );
+		host->set_inbox ( host_inbox.text ( ) );
+		guest->set_inbox ( guest_inbox.text ( ) );
+		host->opened ( );
+		guest->opened ( );
+		pump_tools ( *host, *guest );
+
+		bool linked = host->connected ( ) && guest->connected ( ) && guest->current_policy ( ) == ( pc::SHARE_TEXT_IN | pc::SHARE_FILES_IN );
+
+		while ( host->next_event ( item ) ) { }
+
+		while ( guest->next_event ( item ) ) { }
+
+		bool to_guest = host->send_text ( L"from the host", 13 );
+		bool blocked = !guest->send_text ( L"from the guest", 14 );
+
+		pump_tools ( *host, *guest );
+
+		bool heard = guest->next_event ( item ) && item.kind == pc::TOOLS_GOT_TEXT && base::same_text ( item.text.data ( ), L"from the host" ) && !host->next_event ( item );
+
+		expect ( staged && linked && to_guest && blocked && heard, "tools: the guest tools shake hands, take the host's policy, and text only crosses in the allowed direction" );
+
+		wchar_t paths [ 1 ] [ MAX_PATH ] = { };
+
+		for ( int32_t i = 0; source.text ( ) [ i ]; i++ )
+			paths [ 0 ] [ i ] = source.text ( ) [ i ];
+
+		bool started = host->send_files ( paths, 1, pc::PURPOSE_SENT, ~0ull );
+
+		pump_tools ( *host, *guest );
+
+		bool arrived = false;
+		bool same = false;
+
+		while ( guest->next_event ( item ) ) {
+
+			if ( item.kind != pc::TOOLS_GOT_FILES || item.count != 1 )
+				continue;
+
+			arrived = true;
+
+			base::writer copy;
+			base::list < char > back;
+
+			copy.add ( item.items.data ( ) ).add ( L"\\inner\\data.bin" );
+			same = files::read ( copy.text ( ), back ) && back.count ( ) == 200001;
+
+			for ( int32_t i = 0; same && i < 200000; i++ )
+				same = back [ i ] == big [ i ];
+
+		}
+
+		host->set_policy ( 0 );
+		pump_tools ( *host, *guest );
+
+		bool shut = !host->send_text ( L"x", 1 ) && !host->send_files ( paths, 1, pc::PURPOSE_SENT, ~0ull ) && guest->current_policy ( ) == 0;
+
+		expect ( started && arrived && same && shut, "tools: a folder with a nested 200 KB file crosses intact, and turning sharing off stops everything at once" );
+
+		delete host;
+		delete guest;
+		runtime_release ( big );
+
+		app::remove_tree ( root.text ( ) );
+
+	}
+
 	void network_tests ( ) {
 
 		print ( "\r\n" );
 		nic_tests ( );
 		nat_tests ( );
+		tools_tests ( );
 
 	}
 

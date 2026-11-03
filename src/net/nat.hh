@@ -8,6 +8,20 @@ namespace net {
 	struct udp_flow;
 	struct echo_request;
 
+	struct service {
+
+		virtual ~service ( ) = default;
+
+		virtual void opened ( ) = 0;
+
+		virtual void received ( const uint8_t* data, uint32_t size ) = 0;
+
+		virtual uint32_t produce ( uint8_t* out, uint32_t room ) = 0;
+
+		virtual void closed ( ) = 0;
+
+	};
+
 	class nat : public wire {
 
 	public:
@@ -15,6 +29,8 @@ namespace net {
 		static constexpr uint32_t guest_address = 0x0A00020F;
 		static constexpr uint32_t gateway_address = 0x0A000202;
 		static constexpr uint32_t resolver_address = 0x0A000203;
+		static constexpr uint32_t tools_address = 0x0A000204;
+		static constexpr uint16_t tools_port = 4000;
 		static constexpr uint32_t max_links = 160;
 		static constexpr uint32_t max_flows = 96;
 		static constexpr uint32_t max_echoes = 8;
@@ -33,13 +49,22 @@ namespace net {
 
 		void process ( const uint8_t* frame, uint32_t size );
 
-		void service ( );
+		void service_all ( );
+
+		void attach_service ( service* target ) {
+
+			local = target;
+
+		}
+
+		void kick ( );
 
 		volatile long frames_in = 0;
 		volatile long frames_out = 0;
 		volatile long dropped = 0;
 		uint8_t guest_mac [ 6 ] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
 		bool guest_known = false;
+		bool isolated = false;
 
 	private:
 
@@ -88,6 +113,7 @@ namespace net {
 		void service_echoes ( );
 
 		port* target = nullptr;
+		service* local = nullptr;
 		tcp_link* links = nullptr;
 		udp_flow* flows = nullptr;
 		echo_request* echoes = nullptr;

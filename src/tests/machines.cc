@@ -1,7 +1,9 @@
 #ifdef COLDBOOT_DEBUG
 
 #include "base/files.hh"
+#include "pc/iso.hh"
 #include "vm/library.hh"
+#include "vm/unattend.hh"
 #include "tests/harness.hh"
 #include <shellapi.h>
 
@@ -258,6 +260,75 @@ namespace tests {
 
 		delete modern;
 		delete modern_copy;
+
+		bool names = vm::user_name_valid ( L"Sam" ) && vm::user_name_valid ( L"Ana Lu" ) && !vm::user_name_valid ( L"" ) && !vm::user_name_valid ( L" . " ) && !vm::user_name_valid ( L"a/b" ) && !vm::user_name_valid ( L"Sam." ) && !vm::user_name_valid ( L"abcdefghijklmnopqrstu" );
+
+		expect ( names, "machines: Windows user names refuse blanks, trailing dots, reserved characters and more than 20 letters" );
+
+		vm::setup_answers* answers = new vm::setup_answers ( );
+		base::list < char > answer_text;
+
+		copy_wide ( answers->user, L"Zoë", 64 );
+		copy_wide ( answers->password, L"a&b<c", 64 );
+		answers->uefi = true;
+		vm::build_answers ( *answers, answer_text );
+		answer_text.push ( 0 );
+
+		bool unattended = contains ( answer_text.data ( ), "<Username>Zo\xC3\xAB</Username>" ) && contains ( answer_text.data ( ), "<Value>a&amp;b&lt;c</Value>" ) && contains ( answer_text.data ( ), "<Type>EFI</Type>" ) && contains ( answer_text.data ( ), "Windows 10 Pro" ) && contains ( answer_text.data ( ), "Coldboot Tools.exe\" --install" ) && contains ( answer_text.data ( ), "NewNetworkWindowOff" ) && !contains ( answer_text.data ( ), "BypassNRO" ) && !contains ( answer_text.data ( ), "International-Core-WinPE" ) && !contains ( answer_text.data ( ), "LabConfig" );
+
+		copy_wide ( answers->user, L"Sam", 64 );
+		answers->password [ 0 ] = 0;
+		answers->uefi = false;
+		answers->windows11 = true;
+		answers->language [ 0 ] = 'd';
+		answers->language [ 1 ] = 'e';
+		answers->language [ 2 ] = '-';
+		answers->language [ 3 ] = 'D';
+		answers->language [ 4 ] = 'E';
+		vm::build_answers ( *answers, answer_text );
+		answer_text.push ( 0 );
+		unattended = unattended && contains ( answer_text.data ( ), "<UILanguage>de-DE</UILanguage>" ) && contains ( answer_text.data ( ), "System Reserved" ) && contains ( answer_text.data ( ), "Windows 11 Pro" ) && contains ( answer_text.data ( ), "BypassTPMCheck" ) && contains ( answer_text.data ( ), "BypassNRO" ) && contains ( answer_text.data ( ), "<Value></Value>" );
+
+		expect ( unattended, "machines: setup answers carry the escaped user and password, the disk layout, edition and Windows 11 bypasses" );
+
+		static const char ini_text [ ] = "[Available UI Languages]\r\nde-DE = 3\r\n\r\n[Fallback Languages]\r\nde-DE = en-us\r\n";
+		base::list < char > wide_ini;
+		base::writer ini_path;
+		base::writer plain_iso;
+		base::writer named_iso;
+		char built_error [ 160 ] = { };
+		char found [ 16 ] = { };
+		char named [ 16 ] = { };
+
+		wide_ini.push ( static_cast < char > ( 0xFF ) );
+		wide_ini.push ( static_cast < char > ( 0xFE ) );
+
+		for ( int32_t i = 0; ini_text [ i ]; i++ ) {
+
+			wide_ini.push ( ini_text [ i ] );
+			wide_ini.push ( 0 );
+
+		}
+
+		ini_path.add ( scratch.text ( ) ).add ( L"\\lang.ini" );
+		plain_iso.add ( scratch.text ( ) ).add ( L"\\plain.iso" );
+		named_iso.add ( scratch.text ( ) ).add ( L"\\named.iso" );
+		files::write ( ini_path.text ( ), wide_ini.data ( ), wide_ini.count ( ) );
+
+		pc::iso_builder* plain = new pc::iso_builder ( );
+		pc::iso_builder* labelled = new pc::iso_builder ( );
+
+		plain->set_label ( "ESD-ISO" );
+		labelled->set_label ( "CCSA_X64FRE_FR-FR_DV9" );
+
+		bool images = plain->add_file ( "sources/lang.ini", ini_path.text ( ) ) && plain->write ( plain_iso.text ( ), built_error, sizeof ( built_error ) ) && labelled->add_file ( "setup.exe", ini_path.text ( ) ) && labelled->write ( named_iso.text ( ), built_error, sizeof ( built_error ) );
+		bool languages = images && vm::image_language ( plain_iso.text ( ), found, sizeof ( found ) ) && base::same_text ( found, "de-DE" ) && vm::image_language ( named_iso.text ( ), named, sizeof ( named ) ) && base::same_text ( named, "fr-FR" );
+
+		expect ( languages, "machines: the setup language comes from the disc label or a UTF-16 sources\\lang.ini" );
+
+		delete plain;
+		delete labelled;
+		delete answers;
 
 		remove_tree ( scratch.text ( ) );
 

@@ -93,17 +93,19 @@ namespace ui {
 
 	}
 
-	float console::tool ( render::gpu& gpu, const theme& colors, float x, const wchar_t* label, render::icon_kind icon, console_action action, bool enabled, bool accent ) {
+	float console::tool ( render::gpu& gpu, const theme& colors, float x, const wchar_t* label, render::icon_kind icon, console_action action, bool enabled, bool accent, bool compact ) {
 
-		float text_width = gpu.measure ( label, render::FONT_BODY );
-		rect area = { x, math::round ( ( toolbar - 30.0f ) * 0.5f ), 10.0f + 16.0f + 7.0f + text_width + 12.0f, 30.0f };
+		float text_width = compact ? 0.0f : gpu.measure ( label, render::FONT_BODY );
+		rect area = { x, math::round ( ( toolbar - 30.0f ) * 0.5f ), compact ? 36.0f : 10.0f + 16.0f + 7.0f + text_width + 12.0f, 30.0f };
 		color tint = enabled ? colors.text : colors.faint;
 
 		if ( enabled && hovered == action )
 			gpu.fill ( area, corner, pressed == action ? colors.pressed : colors.hover );
 
 		gpu.icon ( icon, area.x + 18.0f, area.y + 15.0f, 15.0f, enabled ? ( accent ? colors.accent : colors.muted ) : colors.faint );
-		gpu.text ( label, render::FONT_BODY, rect { area.x + 33.0f, area.y, text_width + 4.0f, area.h }, tint, render::ALIGN_LEFT );
+
+		if ( !compact )
+			gpu.text ( label, render::FONT_BODY, rect { area.x + 33.0f, area.y, text_width + 4.0f, area.h }, tint, render::ALIGN_LEFT );
 
 		if ( enabled )
 			add_hit ( area, action );
@@ -160,33 +162,71 @@ namespace ui {
 
 	void console::paint_toolbar ( render::gpu& gpu, const theme& colors, const console_view& state ) {
 
-		float x = 8.0f;
+		struct entry {
+
+			const wchar_t* label;
+			render::icon_kind icon;
+			console_action action;
+			bool enabled;
+			bool accent;
+			bool divided;
+
+		};
+
 		bool disc = state.disc [ 0 ] != 0;
+		bool on = state.running;
+		entry items [ 14 ];
+		int32_t count = 0;
+
+		if ( on ) {
+
+			items [ count++ ] = { L"Shut down", render::ICON_POWER, TOOL_SHUT_DOWN, true, false, false };
+			items [ count++ ] = { L"Turn off", render::ICON_POWER, TOOL_TURN_OFF, true, false, false };
+			items [ count++ ] = { L"Reset", render::ICON_RESET, TOOL_RESET, true, false, false };
+			items [ count++ ] = { L"Ctrl+Alt+Del", render::ICON_KEYBOARD, TOOL_KEYS, true, false, false };
+
+		} else
+			items [ count++ ] = { L"Start", render::ICON_PLAY, TOOL_START, true, true, false };
+
+		if ( state.can_save )
+			items [ count++ ] = { L"Save state", render::ICON_SAVE, TOOL_SAVE, on, false, false };
+
+		items [ count++ ] = { disc ? L"Change disc" : L"Insert disc", render::ICON_DISK, TOOL_DISC, true, false, true };
+
+		if ( disc )
+			items [ count++ ] = { L"Eject", render::ICON_EJECT, TOOL_EJECT, true, false, false };
+
+		items [ count++ ] = { L"Send files", render::ICON_FOLDER, TOOL_FILES, on, false, true };
+		items [ count++ ] = { L"Type text", render::ICON_KEYBOARD, TOOL_TYPE, on, false, false };
+
+		if ( on && !state.tools_linked )
+			items [ count++ ] = { L"Install tools", render::ICON_PLUS, TOOL_TOOLS, true, false, false };
+		items [ count++ ] = { L"Screenshot", render::ICON_CAMERA, TOOL_SHOT, on && state.frame_width > 0, false, true };
+		items [ count++ ] = { L"Fullscreen", render::ICON_EXPAND, TOOL_FULLSCREEN, true, false, false };
+
+		float needed = 16.0f;
+
+		for ( int32_t i = 0; i < count; i++ )
+			needed += 47.0f + gpu.measure ( items [ i ].label, render::FONT_BODY ) + ( items [ i ].divided ? 14.0f : 0.0f );
+
+		bool compact = needed > width;
+		float x = 8.0f;
 
 		gpu.fill ( rect { 0.0f, 0.0f, width, toolbar }, 0.0f, colors.chrome );
 		gpu.fill ( rect { 0.0f, toolbar - 1.0f, width, 1.0f }, 0.0f, colors.divider );
 
-		if ( state.running ) {
+		for ( int32_t i = 0; i < count; i++ ) {
 
-			x = tool ( gpu, colors, x, L"Shut down", render::ICON_POWER, TOOL_SHUT_DOWN, true, false );
-			x = tool ( gpu, colors, x, L"Turn off", render::ICON_POWER, TOOL_TURN_OFF, true, false );
-			x = tool ( gpu, colors, x, L"Reset", render::ICON_RESET, TOOL_RESET, true, false );
-			x = tool ( gpu, colors, x, L"Ctrl+Alt+Del", render::ICON_KEYBOARD, TOOL_KEYS, true, false );
+			if ( items [ i ].divided ) {
 
-		} else
-			x = tool ( gpu, colors, x, L"Start", render::ICON_PLAY, TOOL_START, true, true );
+				gpu.fill ( rect { x + 6.0f, 13.0f, 1.0f, toolbar - 26.0f }, 0.0f, colors.divider );
+				x += 14.0f;
 
-		gpu.fill ( rect { x + 6.0f, 13.0f, 1.0f, toolbar - 26.0f }, 0.0f, colors.divider );
-		x += 14.0f;
-		x = tool ( gpu, colors, x, disc ? L"Change disc" : L"Insert disc", render::ICON_DISK, TOOL_DISC, true, false );
+			}
 
-		if ( disc )
-			x = tool ( gpu, colors, x, L"Eject", render::ICON_EJECT, TOOL_EJECT, true, false );
+			x = tool ( gpu, colors, x, items [ i ].label, items [ i ].icon, items [ i ].action, items [ i ].enabled, items [ i ].accent, compact );
 
-		gpu.fill ( rect { x + 6.0f, 13.0f, 1.0f, toolbar - 26.0f }, 0.0f, colors.divider );
-		x += 14.0f;
-		x = tool ( gpu, colors, x, L"Screenshot", render::ICON_CAMERA, TOOL_SHOT, state.running && state.frame_width > 0, false );
-		tool ( gpu, colors, x, L"Fullscreen", render::ICON_EXPAND, TOOL_FULLSCREEN, true, false );
+		}
 
 	}
 
@@ -307,6 +347,9 @@ namespace ui {
 
 		if ( state.running && state.frame_width > 0 )
 			right.number ( state.frame_width ).add ( L" \x00D7 " ).number ( state.frame_height ).add ( L"  \x00B7  " );
+
+		if ( state.tools_linked )
+			right.add ( L"Tools connected  \x00B7  " );
 
 		right.add ( state.captured ? L"Right Ctrl releases the mouse and keyboard" : ( state.integrated ? L"Mouse integration on" : L"Click the screen to capture the mouse" ) );
 		gpu.text ( right.text ( ), render::FONT_SMALL, rect { width * 0.45f, bar.y, width * 0.55f - 14.0f, status }, state.captured ? colors.accent : colors.faint, render::ALIGN_RIGHT );

@@ -493,6 +493,8 @@ namespace tests {
 			choices [ i ].memory_mb = table [ i ].memory;
 			choices [ i ].processors = table [ i ].processors;
 			choices [ i ].disk_gb = table [ i ].disk_gb;
+			choices [ i ].uefi = base::same_text ( table [ i ].id, "windows11" );
+			choices [ i ].windows = choices [ i ].uefi || base::same_text ( table [ i ].id, "windows10" );
 
 		}
 
@@ -520,6 +522,7 @@ namespace tests {
 
 				view->apply_preset ( 0 );
 				view->form.name.set ( L"Windows 11" );
+				view->form.user.set ( L"Sam" );
 				view->form.disk_gb = 64;
 
 				const wchar_t* image = L"D:\\Images\\Win11_24H2_English_x64.iso";

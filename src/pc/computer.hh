@@ -5,6 +5,7 @@
 #include "pc/e1000.hh"
 #include "pc/hda.hh"
 #include "pc/platform.hh"
+#include "pc/tools.hh"
 #include "pc/uefi.hh"
 #include "pc/uhci.hh"
 
@@ -18,6 +19,7 @@ namespace pc {
 		bool optical_first = true;
 		bool network = true;
 		bool uefi = false;
+		uint32_t sharing = SHARE_TEXT_IN | SHARE_TEXT_OUT | SHARE_FILES_IN | SHARE_FILES_OUT;
 		wchar_t iso [ MAX_PATH ] = { };
 		wchar_t disk [ MAX_PATH ] = { };
 		wchar_t helper [ MAX_PATH ] = { };
@@ -68,6 +70,8 @@ namespace pc {
 
 		bool change_disc ( const wchar_t* path );
 
+		bool change_second_disc ( const wchar_t* path );
+
 		bool screen ( uint32_t* out, int32_t& width, int32_t& height, double now );
 
 		int32_t console_text ( char* out, int32_t room );
@@ -94,6 +98,7 @@ namespace pc {
 		disk_file disc;
 		disk_file drive;
 		disk_file helper;
+		guest_tools tools;
 
 	private:
 

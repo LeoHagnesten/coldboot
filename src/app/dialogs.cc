@@ -99,6 +99,50 @@ namespace app {
 
 	}
 
+	int32_t open_files ( HWND owner, wchar_t ( *out ) [ MAX_PATH ], int32_t room ) {
+
+		IFileOpenDialog* dialog = nullptr;
+		IShellItemArray* items = nullptr;
+		DWORD options = 0;
+		DWORD count = 0;
+		int32_t taken = 0;
+
+		if ( FAILED ( CoCreateInstance ( CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS ( &dialog ) ) ) )
+			return 0;
+
+		dialog->GetOptions ( &options );
+		dialog->SetOptions ( options | FOS_ALLOWMULTISELECT | FOS_FORCEFILESYSTEM );
+		dialog->SetTitle ( L"Send files to the machine" );
+
+		if ( SUCCEEDED ( dialog->Show ( owner ) ) && SUCCEEDED ( dialog->GetResults ( &items ) ) && SUCCEEDED ( items->GetCount ( &count ) ) ) {
+
+			for ( DWORD i = 0; i < count && taken < room; i++ ) {
+
+				IShellItem* item = nullptr;
+				wchar_t* path = nullptr;
+
+				if ( SUCCEEDED ( items->GetItemAt ( i, &item ) ) && SUCCEEDED ( item->GetDisplayName ( SIGDN_FILESYSPATH, &path ) ) )
+					copy_text ( out [ taken++ ], path, MAX_PATH );
+
+				if ( path )
+					CoTaskMemFree ( path );
+
+				if ( item )
+					item->Release ( );
+
+			}
+
+		}
+
+		if ( items )
+			items->Release ( );
+
+		dialog->Release ( );
+
+		return taken;
+
+	}
+
 	bool save_file ( HWND owner, file_kind kind, const wchar_t* suggested, wchar_t* out ) {
 
 		IFileSaveDialog* dialog = nullptr;

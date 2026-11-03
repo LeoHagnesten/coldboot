@@ -5,6 +5,7 @@
 #include "pc/iso.hh"
 #include "tests/harness.hh"
 #include "vm/config.hh"
+#include "vm/unattend.hh"
 #include <windows.h>
 
 namespace tests {
@@ -92,6 +93,24 @@ namespace tests {
 				Sleep ( 40 );
 				i++;
 
+			} else if ( c == L'\\' && text [ i + 1 ] == L'R' ) {
+
+				machine.key ( 0x5B, true );
+				Sleep ( 40 );
+				press ( machine, 0x13, false );
+				machine.key ( 0xDB, true );
+				Sleep ( 40 );
+				i++;
+
+			} else if ( c == L'\\' && text [ i + 1 ] == L'c' && text [ i + 2 ] >= L'a' && text [ i + 2 ] <= L'z' ) {
+
+				machine.key ( 0x1D, false );
+				Sleep ( 40 );
+				press ( machine, static_cast < uint8_t > ( letters [ text [ i + 2 ] - L'a' ] ), false );
+				machine.key ( 0x9D, false );
+				Sleep ( 40 );
+				i += 2;
+
 			} else if ( c == L'\\' && text [ i + 1 ] == L'T' ) {
 
 				machine.key ( 0x2A, false );
@@ -129,6 +148,28 @@ namespace tests {
 				press ( machine, 0x33, false );
 			else if ( c == L'\t' )
 				press ( machine, 0x0F, false );
+			else {
+
+				static const wchar_t shifted [ ] = L"!@#$%^&*()_+{}\"~|<>?";
+				static const uint8_t scans [ ] = { 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x1A, 0x1B, 0x28, 0x29, 0x2B, 0x33, 0x34, 0x35 };
+				static const wchar_t plain [ ] = L"[]'`;";
+				static const uint8_t plain_scans [ ] = { 0x1A, 0x1B, 0x28, 0x29, 0x27 };
+
+				for ( int32_t k = 0; shifted [ k ]; k++ ) {
+
+					if ( shifted [ k ] == c )
+						press ( machine, scans [ k ], true );
+
+				}
+
+				for ( int32_t k = 0; plain [ k ]; k++ ) {
+
+					if ( plain [ k ] == c )
+						press ( machine, plain_scans [ k ], false );
+
+				}
+
+			}
 
 		}
 
@@ -404,6 +445,42 @@ namespace tests {
 
 				}
 
+			} else if ( starts ( line, L"tools" ) ) {
+
+				wchar_t self [ MAX_PATH ] = { };
+				base::writer target;
+				char error [ 160 ] = { };
+				pc::iso_builder* builder = new pc::iso_builder ( );
+
+				GetModuleFileNameW ( nullptr, self, MAX_PATH );
+				target.add ( folder ).add ( L"\\tools.iso" );
+				builder->set_label ( "COLDBOOT_TOOLS" );
+
+				bool made = builder->add_file ( "Coldboot Tools.exe", self ) && builder->write ( target.text ( ), error, sizeof ( error ) );
+
+				delete builder;
+				print ( made && machine.change_second_disc ( target.text ( ) ) ? "tools: disc inserted\r\n" : "tools: disc failed\r\n" );
+
+			} else if ( starts ( line, L"clip " ) ) {
+
+				int32_t length = 0;
+
+				while ( line [ 5 + length ] )
+					length++;
+
+				print ( machine.tools.send_text ( line + 5, static_cast < uint32_t > ( length ) ) ? "tools: text sent\r\n" : "tools: text refused\r\n" );
+
+			} else if ( starts ( line, L"clipfiles " ) || starts ( line, L"sendfile " ) ) {
+
+				bool clipboard = starts ( line, L"clipfiles " );
+				wchar_t paths [ 1 ] [ MAX_PATH ] = { };
+				const wchar_t* source = line + ( clipboard ? 10 : 9 );
+
+				for ( int32_t c = 0; source [ c ] && c < MAX_PATH - 1; c++ )
+					paths [ 0 ] [ c ] = source [ c ];
+
+				print ( machine.tools.send_files ( paths, 1, clipboard ? pc::PURPOSE_CLIPBOARD : pc::PURPOSE_SENT, ~0ull ) ? "tools: files sending\r\n" : "tools: files refused\r\n" );
+
 			} else if ( starts ( line, L"power" ) )
 				machine.press_power ( );
 			else if ( starts ( line, L"quit" ) )
@@ -425,6 +502,8 @@ namespace tests {
 
 		const wchar_t* folder = nullptr;
 		const wchar_t* control = nullptr;
+		const wchar_t* unattend_user = nullptr;
+		const wchar_t* unattend_password = L"";
 		const wchar_t* typed = nullptr;
 		double type_at = 0.0;
 		const wchar_t* script_text [ 32 ] = { };
@@ -500,6 +579,10 @@ namespace tests {
 				options->network = false;
 			else if ( base::same_text ( arguments [ i ], L"--uefi" ) )
 				options->uefi = true;
+			else if ( base::same_text ( arguments [ i ], L"--unattend" ) )
+				unattend_user = next ( );
+			else if ( base::same_text ( arguments [ i ], L"--password" ) )
+				unattend_password = next ( );
 			else if ( base::same_text ( arguments [ i ], L"--variables" ) ) {
 
 				const wchar_t* path = next ( );
@@ -543,10 +626,45 @@ namespace tests {
 
 		CreateDirectoryW ( folder, nullptr );
 
+		if ( unattend_user ) {
+
+			vm::setup_answers* answers = new vm::setup_answers ( );
+			char error [ 160 ] = { };
+
+			for ( int32_t c = 0; unattend_user [ c ] && c < 63; c++ )
+				answers->user [ c ] = unattend_user [ c ];
+
+			for ( int32_t c = 0; unattend_password [ c ] && c < 63; c++ )
+				answers->password [ c ] = unattend_password [ c ];
+
+			answers->uefi = options->uefi;
+			vm::image_language ( options->iso, answers->language, sizeof ( answers->language ) );
+
+			bool written = vm::write_setup_disc ( folder, *answers, options->helper, error, sizeof ( error ) );
+			char note [ 200 ] = "answers: ";
+
+			append ( note, sizeof ( note ), written ? "written, language " : error );
+			append ( note, sizeof ( note ), written ? ( answers->language [ 0 ] ? answers->language : "unknown" ) : "" );
+			append ( note, sizeof ( note ), "\r\n" );
+			print ( note );
+			delete answers;
+
+		}
+
 		pc::computer* machine = new pc::computer ( );
 		counting_speaker* speaker = new counting_speaker ( );
 
 		machine->speaker = speaker;
+
+		{
+
+			base::writer inbox;
+
+			inbox.add ( folder ).add ( L"\\inbox" );
+			CreateDirectoryW ( inbox.text ( ), nullptr );
+			machine->tools.set_inbox ( inbox.text ( ) );
+
+		}
 
 		uint32_t* pixels = static_cast < uint32_t* > ( runtime_allocate ( sizeof ( uint32_t ) * pc::vga::max_width * pc::vga::max_height ) );
 		char line [ 512 ];
@@ -625,6 +743,27 @@ namespace tests {
 
 			if ( control && !run_control ( *machine, control, folder, pixels ) )
 				break;
+
+			pc::tools_event happened;
+
+			while ( machine->tools.next_event ( happened ) ) {
+
+				char note [ 600 ] = "tools: ";
+				static const char* const kinds [ 7 ] = { "none", "connected", "disconnected", "text ", "files ", "sent", "refused" };
+
+				append ( note, sizeof ( note ), kinds [ happened.kind < 7 ? happened.kind : 0 ] );
+
+				const base::list < wchar_t >& words = happened.kind == pc::TOOLS_GOT_TEXT ? happened.text : happened.items;
+				char narrow [ 400 ] = { };
+
+				if ( !words.empty ( ) )
+					WideCharToMultiByte ( CP_UTF8, 0, words.data ( ), -1, narrow, sizeof ( narrow ) - 1, nullptr, nullptr );
+
+				append ( note, sizeof ( note ), narrow );
+				append ( note, sizeof ( note ), "\r\n" );
+				print ( note );
+
+			}
 
 			if ( every > 0.0 && elapsed >= next_shot ) {
 

@@ -3,6 +3,328 @@
 
 namespace pc {
 
+	static bool read_at ( HANDLE file, uint64_t offset, void* out, uint32_t size ) {
+
+		OVERLAPPED place = { };
+		DWORD done = 0;
+
+		place.Offset = static_cast < DWORD > ( offset );
+		place.OffsetHigh = static_cast < DWORD > ( offset >> 32 );
+
+		return ReadFile ( file, out, size, &done, &place ) && done == size;
+
+	}
+
+	static uint32_t record_le32 ( const uint8_t* at ) {
+
+		return static_cast < uint32_t > ( at [ 0 ] ) | static_cast < uint32_t > ( at [ 1 ] ) << 8 | static_cast < uint32_t > ( at [ 2 ] ) << 16 | static_cast < uint32_t > ( at [ 3 ] ) << 24;
+
+	}
+
+	static uint16_t record_le16 ( const uint8_t* at ) {
+
+		return static_cast < uint16_t > ( at [ 0 ] | at [ 1 ] << 8 );
+
+	}
+
+	struct udf_volume {
+
+		HANDLE file = INVALID_HANDLE_VALUE;
+		uint32_t partition = 0;
+
+	};
+
+	static bool udf_extents ( udf_volume& volume, uint32_t block, base::list < uint8_t >& out, uint64_t limit, bool& folder ) {
+
+		uint8_t entry [ 2048 ];
+
+		out.clear ( );
+
+		if ( !read_at ( volume.file, ( static_cast < uint64_t > ( volume.partition ) + block ) * 2048, entry, 2048 ) )
+			return false;
+
+		uint16_t tag = record_le16 ( entry );
+
+		if ( tag != 261 && tag != 266 )
+			return false;
+
+		uint32_t kind = record_le16 ( entry + 16 + 18 ) & 7;
+		uint64_t length = static_cast < uint64_t > ( record_le32 ( entry + 56 ) ) | static_cast < uint64_t > ( record_le32 ( entry + 60 ) ) << 32;
+		uint32_t attributes = record_le32 ( entry + ( tag == 261 ? 168 : 208 ) );
+		uint32_t descriptors = record_le32 ( entry + ( tag == 261 ? 172 : 212 ) );
+		uint32_t start = ( tag == 261 ? 176 : 216 ) + attributes;
+
+		folder = entry [ 16 + 11 ] == 4;
+
+		if ( length > limit || start + descriptors > 2048 )
+			return false;
+
+		if ( kind == 3 ) {
+
+			for ( uint32_t i = 0; i < descriptors && out.size ( ) < length; i++ )
+				out.push ( entry [ start + i ] );
+
+			return true;
+
+		}
+
+		uint32_t step = kind == 0 ? 8 : 16;
+
+		if ( kind > 1 )
+			return false;
+
+		out.resize ( static_cast < size_t > ( length ) );
+
+		uint64_t done = 0;
+
+		for ( uint32_t at = start; at + step <= start + descriptors && done < length; at += step ) {
+
+			uint32_t extent = record_le32 ( entry + at ) & 0x3FFFFFFF;
+			uint32_t place = record_le32 ( entry + at + 4 );
+
+			if ( !extent )
+				break;
+
+			uint64_t take = extent < length - done ? extent : length - done;
+
+			if ( !read_at ( volume.file, ( static_cast < uint64_t > ( volume.partition ) + place ) * 2048, out.data ( ) + done, static_cast < uint32_t > ( take ) ) )
+				return false;
+
+			done += take;
+
+		}
+
+		return done == length;
+
+	}
+
+	static bool udf_read_file ( HANDLE file, const char* path, base::list < uint8_t >& out, uint32_t limit ) {
+
+		uint8_t sector [ 2048 ];
+		udf_volume volume;
+		uint32_t fileset = 0;
+		bool found_partition = false;
+
+		volume.file = file;
+
+		if ( !read_at ( file, 256 * 2048ull, sector, 2048 ) || record_le16 ( sector ) != 2 )
+			return false;
+
+		uint32_t sequence_length = record_le32 ( sector + 16 );
+		uint32_t sequence = record_le32 ( sector + 20 );
+
+		for ( uint32_t i = 0; i < sequence_length / 2048 && i < 64; i++ ) {
+
+			if ( !read_at ( file, ( static_cast < uint64_t > ( sequence ) + i ) * 2048, sector, 2048 ) )
+				return false;
+
+			uint16_t tag = record_le16 ( sector );
+
+			if ( tag == 5 ) {
+
+				volume.partition = record_le32 ( sector + 188 );
+				found_partition = true;
+
+			} else if ( tag == 6 )
+				fileset = record_le32 ( sector + 248 + 4 );
+			else if ( tag == 8 )
+				break;
+
+		}
+
+		if ( !found_partition || !read_at ( file, ( static_cast < uint64_t > ( volume.partition ) + fileset ) * 2048, sector, 2048 ) || record_le16 ( sector ) != 256 )
+			return false;
+
+		uint32_t current = record_le32 ( sector + 400 + 4 );
+		bool folder = true;
+		base::list < uint8_t > data;
+
+		for ( const char* at = path; *at; ) {
+
+			while ( *at == '/' || *at == '\\' )
+				at++;
+
+			uint32_t length = 0;
+
+			while ( at [ length ] && at [ length ] != '/' && at [ length ] != '\\' )
+				length++;
+
+			if ( !length )
+				break;
+
+			if ( !udf_extents ( volume, current, data, 0x1000000, folder ) || !folder )
+				return false;
+
+			bool found = false;
+
+			for ( uint32_t offset = 0; offset + 38 <= data.size ( ) && !found; ) {
+
+				const uint8_t* record = data.data ( ) + offset;
+
+				if ( record_le16 ( record ) != 257 )
+					break;
+
+				uint32_t name_length = record [ 19 ];
+				uint32_t use_length = record_le16 ( record + 36 );
+				const uint8_t* name = record + 38 + use_length;
+				uint32_t total = ( 38 + use_length + name_length + 3 ) & ~3u;
+
+				if ( offset + 38 + use_length + name_length > data.size ( ) )
+					break;
+
+				if ( name_length > 1 && !( record [ 18 ] & 8 ) ) {
+
+					bool wide = name [ 0 ] == 16;
+					uint32_t characters = wide ? ( name_length - 1 ) / 2 : name_length - 1;
+					bool same = characters == length;
+
+					for ( uint32_t i = 0; same && i < length; i++ ) {
+
+						uint32_t c = wide ? static_cast < uint32_t > ( name [ 1 + i * 2 ] << 8 | name [ 2 + i * 2 ] ) : name [ 1 + i ];
+
+						same = c < 128 && ( static_cast < char > ( c ) | 0x20 ) == ( at [ i ] | 0x20 );
+
+					}
+
+					if ( same ) {
+
+						current = record_le32 ( record + 20 + 4 );
+						found = true;
+
+					}
+
+				}
+
+				offset += total;
+
+			}
+
+			if ( !found )
+				return false;
+
+			at += length;
+
+		}
+
+		return udf_extents ( volume, current, out, limit, folder ) && !folder;
+
+	}
+
+	bool iso_read_file ( const wchar_t* image, const char* path, base::list < uint8_t >& out, uint32_t limit ) {
+
+		HANDLE file = CreateFileW ( image, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr );
+		uint8_t sector [ 2048 ];
+
+		out.clear ( );
+
+		if ( file == INVALID_HANDLE_VALUE )
+			return false;
+
+		bool ok = read_at ( file, 16 * 2048ull, sector, 2048 ) && sector [ 0 ] == 1 && sector [ 1 ] == 'C' && sector [ 2 ] == 'D';
+		uint32_t extent = ok ? record_le32 ( sector + 156 + 2 ) : 0;
+		uint32_t size = ok ? record_le32 ( sector + 156 + 10 ) : 0;
+		bool folder = true;
+
+		for ( const char* at = path; ok && *at; ) {
+
+			while ( *at == '/' || *at == '\\' )
+				at++;
+
+			uint32_t length = 0;
+
+			while ( at [ length ] && at [ length ] != '/' && at [ length ] != '\\' )
+				length++;
+
+			if ( !length )
+				break;
+
+			if ( !folder || size > 0x1000000 ) {
+
+				ok = false;
+
+				break;
+
+			}
+
+			bool found = false;
+
+			for ( uint32_t offset = 0; offset < size && !found; offset += 2048 ) {
+
+				if ( !read_at ( file, ( static_cast < uint64_t > ( extent ) * 2048 ) + offset, sector, 2048 ) ) {
+
+					ok = false;
+
+					break;
+
+				}
+
+				for ( uint32_t at_record = 0; at_record + 33 < 2048 && !found; ) {
+
+					uint8_t record = sector [ at_record ];
+
+					if ( !record )
+						break;
+
+					uint32_t name_length = sector [ at_record + 32 ];
+					const char* name = reinterpret_cast < const char* > ( sector + at_record + 33 );
+					uint32_t used = name_length;
+
+					for ( uint32_t i = 0; i < name_length; i++ ) {
+
+						if ( name [ i ] == ';' ) {
+
+							used = i;
+							break;
+
+						}
+
+					}
+
+					if ( used && name [ used - 1 ] == '.' )
+						used--;
+
+					bool same = used == length && at_record + 33 + name_length <= 2048;
+
+					for ( uint32_t i = 0; same && i < length; i++ )
+						same = ( name [ i ] | 0x20 ) == ( at [ i ] | 0x20 );
+
+					if ( same ) {
+
+						extent = record_le32 ( sector + at_record + 2 );
+						size = record_le32 ( sector + at_record + 10 );
+						folder = ( sector [ at_record + 25 ] & 2 ) != 0;
+						found = true;
+
+					}
+
+					at_record += record;
+
+				}
+
+			}
+
+			ok = ok && found;
+			at += length;
+
+		}
+
+		if ( ok && !folder && size <= limit ) {
+
+			out.resize ( size );
+			ok = !size || read_at ( file, static_cast < uint64_t > ( extent ) * 2048, out.data ( ), size );
+
+		} else
+			ok = false;
+
+		if ( !ok )
+			ok = udf_read_file ( file, path, out, limit );
+
+		CloseHandle ( file );
+
+		return ok;
+
+	}
+
 	static constexpr uint32_t sector = 2048;
 	static const uint8_t stamp [ 7 ] = { 126, 11, 2, 0, 0, 0, 0 };
 

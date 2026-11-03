@@ -489,8 +489,25 @@ namespace vm {
 				else
 					ok = fail ( error, room, line_number, "firmware has to be bios or uefi" );
 
+			} else if ( key ( "clipboard" ) || key ( "file_sharing" ) ) {
+
+				uint8_t& target = key ( "clipboard" ) ? result->clipboard : result->file_sharing;
+
+				if ( same_key ( value, value_size, "off" ) )
+					target = 0;
+				else if ( same_key ( value, value_size, "to-machine" ) )
+					target = 1;
+				else if ( same_key ( value, value_size, "from-machine" ) )
+					target = 2;
+				else if ( same_key ( value, value_size, "both" ) )
+					target = 3;
+				else
+					ok = fail ( error, room, line_number, "sharing has to be off, to-machine, from-machine or both" );
+
 			} else if ( key ( "network" ) )
 				ok = flag ( result->network );
+			else if ( key ( "unattended" ) )
+				ok = flag ( result->unattended );
 			else if ( key ( "iso" ) )
 				ok = path ( result->iso );
 			else if ( key ( "disk" ) )
@@ -677,6 +694,14 @@ namespace vm {
 			put ( out, in.disk_first ? "boot=disk\n" : "boot=cd\n" );
 			put ( out, in.uefi ? "firmware=uefi\n" : "firmware=bios\n" );
 			put_number ( out, "network", in.network );
+
+			static const char* const shares [ 4 ] = { "off\n", "to-machine\n", "from-machine\n", "both\n" };
+
+			put ( out, "clipboard=" );
+			put ( out, shares [ in.clipboard & 3 ] );
+			put ( out, "file_sharing=" );
+			put ( out, shares [ in.file_sharing & 3 ] );
+			put_number ( out, "unattended", in.unattended );
 			put_text ( out, "iso", in.iso, false );
 			put_text ( out, "disk", in.disk, false );
 

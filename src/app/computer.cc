@@ -1,14 +1,17 @@
 #include "app/audio.hh"
+#include "app/clipboard.hh"
 #include "app/dialogs.hh"
 #include "app/settings.hh"
 #include "base/files.hh"
 #include "base/png.hh"
 #include "pc/computer.hh"
+#include "pc/iso.hh"
 #include "render/gpu.hh"
 #include "ui/console.hh"
 #include "vm/library.hh"
 #include <windows.h>
 #include <dwmapi.h>
+#include <shellapi.h>
 
 namespace app {
 
@@ -67,6 +70,28 @@ namespace app {
 	static wchar_t disk_name [ MAX_PATH ] = { };
 	static WINDOWPLACEMENT saved_place = { sizeof ( WINDOWPLACEMENT ) };
 	static LARGE_INTEGER frequency;
+	static constexpr int32_t sent_room = 64;
+	static wchar_t ( *sent ) [ MAX_PATH ] = nullptr;
+	static int32_t sent_count = 0;
+	static int32_t sent_flip = 0;
+	static wchar_t sent_disc [ MAX_PATH ] = { };
+	static HANDLE sender = nullptr;
+	static HANDLE typist = nullptr;
+	static wchar_t* typed = nullptr;
+	static volatile long typing_quit = 0;
+	static wchar_t clipboard_inbox [ MAX_PATH ] = { };
+	static DWORD ignore_sequence = 0;
+	static bool tools_linked = false;
+
+	struct send_job {
+
+		wchar_t paths [ sent_room ] [ MAX_PATH ];
+		int32_t count = 0;
+		int32_t files = 0;
+		wchar_t target [ MAX_PATH ] = { };
+		bool ok = false;
+
+	};
 
 	static double now_seconds ( ) {
 
@@ -183,6 +208,7 @@ namespace app {
 		view.failed = failed;
 		view.captured = captured;
 		view.integrated = integrated && running;
+		view.tools_linked = tools_linked && running;
 		view.fullscreen = fullscreen;
 		view.pixels = running && frame_width ? frame : nullptr;
 		view.frame_width = frame_width;
@@ -297,6 +323,8 @@ namespace app {
 
 	static void set_capture ( bool value );
 
+	static void stop_typing ( );
+
 	static void save_preview ( ) {
 
 		wchar_t folder [ MAX_PATH ];
@@ -338,6 +366,9 @@ namespace app {
 		options.optical_first = !file->disk_first;
 		options.uefi = file->uefi;
 		options.network = file->network;
+		options.sharing = ( file->clipboard & 1 ? pc::SHARE_TEXT_IN : 0u ) | ( file->clipboard & 2 ? pc::SHARE_TEXT_OUT : 0u ) | ( file->file_sharing & 1 ? pc::SHARE_FILES_IN : 0u ) | ( file->file_sharing & 2 ? pc::SHARE_FILES_OUT : 0u );
+		machine->tools.set_inbox ( clipboard_inbox );
+		tools_linked = false;
 		copy_wide ( options.iso, file->iso, MAX_PATH );
 		copy_wide ( options.disk, file->disk, MAX_PATH );
 
@@ -354,7 +385,14 @@ namespace app {
 
 		}
 
-		if ( base::same_text ( file->os, "windows11" ) && vm::folder_of ( file_path, folder ) )
+		base::writer answers;
+
+		if ( file->unattended && vm::folder_of ( file_path, folder ) )
+			answers.add ( folder ).add ( L"\\setup-answers.iso" );
+
+		if ( answers.size ( ) && GetFileAttributesW ( answers.text ( ) ) != INVALID_FILE_ATTRIBUTES )
+			copy_wide ( options.helper, answers.text ( ), MAX_PATH );
+		else if ( base::same_text ( file->os, "windows11" ) && vm::folder_of ( file_path, folder ) )
 			helped = pc::make_setup_helper ( folder, options.helper, error, sizeof ( error ) );
 
 		failed = false;
@@ -394,6 +432,7 @@ namespace app {
 		if ( keep_screen )
 			save_preview ( );
 
+		stop_typing ( );
 		machine->power_off ( );
 		running = false;
 		render ( );
@@ -404,6 +443,7 @@ namespace app {
 
 		set_capture ( false );
 		release_keys ( );
+		stop_typing ( );
 
 		if ( !machine->restart ( ) ) {
 
@@ -681,14 +721,573 @@ namespace app {
 
 	}
 
-	static void insert_disc ( ) {
+	static void stop_typing ( ) {
 
-		wchar_t path [ MAX_PATH ];
+		if ( typist ) {
+
+			InterlockedExchange ( &typing_quit, 1 );
+			WaitForSingleObject ( typist, INFINITE );
+			CloseHandle ( typist );
+			typist = nullptr;
+
+		}
+
+		runtime_release ( typed );
+		typed = nullptr;
+
+	}
+
+	static bool key_for ( wchar_t c, uint8_t& scan, bool& shifted ) {
+
+		static const char letters [ 26 ] = { 0x1E, 0x30, 0x2E, 0x20, 0x12, 0x21, 0x22, 0x23, 0x17, 0x24, 0x25, 0x26, 0x32, 0x31, 0x18, 0x19, 0x10, 0x13, 0x1F, 0x14, 0x16, 0x2F, 0x11, 0x2D, 0x15, 0x2C };
+		static const char plain [ ] = "1234567890-=[];'`\\,./ \n\t";
+		static const uint8_t plain_scans [ ] = { 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x1A, 0x1B, 0x27, 0x28, 0x29, 0x2B, 0x33, 0x34, 0x35, 0x39, 0x1C, 0x0F };
+		static const char shifted_keys [ ] = "!@#$%^&*()_+{}:\"~|<>?";
+		static const uint8_t shifted_scans [ ] = { 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x1A, 0x1B, 0x27, 0x28, 0x29, 0x2B, 0x33, 0x34, 0x35 };
+
+		shifted = false;
+
+		if ( c >= L'a' && c <= L'z' ) {
+
+			scan = static_cast < uint8_t > ( letters [ c - L'a' ] );
+
+			return true;
+
+		}
+
+		if ( c >= L'A' && c <= L'Z' ) {
+
+			scan = static_cast < uint8_t > ( letters [ c - L'A' ] );
+			shifted = true;
+
+			return true;
+
+		}
+
+		for ( int32_t i = 0; plain [ i ]; i++ ) {
+
+			if ( c == static_cast < wchar_t > ( plain [ i ] ) ) {
+
+				scan = plain_scans [ i ];
+
+				return true;
+
+			}
+
+		}
+
+		for ( int32_t i = 0; shifted_keys [ i ]; i++ ) {
+
+			if ( c == static_cast < wchar_t > ( shifted_keys [ i ] ) ) {
+
+				scan = shifted_scans [ i ];
+				shifted = true;
+
+				return true;
+
+			}
+
+		}
+
+		return false;
+
+	}
+
+	static DWORD __stdcall type_loop ( void* ) {
+
+		for ( int32_t i = 0; typed [ i ] && !typing_quit; i++ ) {
+
+			uint8_t scan = 0;
+			bool shifted = false;
+
+			if ( typed [ i ] == L'\r' || !key_for ( typed [ i ], scan, shifted ) )
+				continue;
+
+			if ( shifted )
+				machine->key ( 0x2A, false );
+
+			machine->key ( scan, false );
+			Sleep ( 6 );
+			machine->key ( static_cast < uint8_t > ( scan | 0x80 ), false );
+
+			if ( shifted )
+				machine->key ( 0xAA, false );
+
+			Sleep ( 8 );
+
+		}
+
+		return 0;
+
+	}
+
+	static void type_clipboard ( ) {
+
+		if ( !running )
+			return;
+
+		stop_typing ( );
+
+		if ( !OpenClipboard ( window ) ) {
+
+			toast ( L"Couldn't open the clipboard" );
+
+			return;
+
+		}
+
+		HANDLE data = GetClipboardData ( CF_UNICODETEXT );
+		const wchar_t* text = data ? static_cast < const wchar_t* > ( GlobalLock ( data ) ) : nullptr;
+
+		if ( text ) {
+
+			int32_t length = 0;
+
+			while ( text [ length ] && length < 65536 )
+				length++;
+
+			typed = static_cast < wchar_t* > ( runtime_allocate ( sizeof ( wchar_t ) * ( length + 1 ) ) );
+
+			for ( int32_t i = 0; i < length; i++ )
+				typed [ i ] = text [ i ];
+
+			typed [ length ] = 0;
+			GlobalUnlock ( data );
+
+		}
+
+		CloseClipboard ( );
+
+		if ( !typed || !typed [ 0 ] ) {
+
+			toast ( L"The clipboard has no text to type" );
+
+			return;
+
+		}
+
+		typing_quit = 0;
+		typist = CreateThread ( nullptr, 0, &type_loop, nullptr, 0, nullptr );
+		toast ( L"Typing the clipboard into the machine" );
+
+	}
+
+	static void add_tree ( pc::iso_builder& builder, const wchar_t* source, const char* name, int32_t& added ) {
+
+		DWORD attributes = GetFileAttributesW ( source );
+
+		if ( attributes == INVALID_FILE_ATTRIBUTES || added > 20000 )
+			return;
+
+		if ( !( attributes & FILE_ATTRIBUTE_DIRECTORY ) ) {
+
+			if ( builder.add_file ( name, source ) )
+				added++;
+
+			return;
+
+		}
+
+		base::writer pattern;
+		WIN32_FIND_DATAW found;
+
+		pattern.add ( source ).add ( L"\\*" );
+
+		HANDLE search = FindFirstFileW ( pattern.text ( ), &found );
+
+		if ( search == INVALID_HANDLE_VALUE )
+			return;
+
+		do {
+
+			if ( found.cFileName [ 0 ] == L'.' && ( !found.cFileName [ 1 ] || ( found.cFileName [ 1 ] == L'.' && !found.cFileName [ 2 ] ) ) )
+				continue;
+
+			base::writer child;
+			char leaf [ 192 ];
+			char path [ 520 ];
+			int32_t used = 0;
+
+			child.add ( source ).add ( L"\\" ).add ( found.cFileName );
+
+			int32_t length = WideCharToMultiByte ( CP_UTF8, 0, found.cFileName, -1, leaf, sizeof ( leaf ), nullptr, nullptr );
+
+			if ( length <= 1 )
+				continue;
+
+			for ( int32_t i = 0; name [ i ] && used < 300; i++ )
+				path [ used++ ] = name [ i ];
+
+			path [ used++ ] = '/';
+
+			for ( int32_t i = 0; leaf [ i ] && used < 518; i++ )
+				path [ used++ ] = leaf [ i ];
+
+			path [ used ] = 0;
+			add_tree ( builder, child.text ( ), path, added );
+
+		} while ( FindNextFileW ( search, &found ) );
+
+		FindClose ( search );
+
+	}
+
+	static DWORD __stdcall build_sent ( void* context ) {
+
+		send_job* job = static_cast < send_job* > ( context );
+		pc::iso_builder* builder = new pc::iso_builder ( );
+		char names [ sent_room ] [ 192 ] = { };
+		char error [ 160 ] = { };
+
+		builder->set_label ( "COLDBOOT_FILES" );
+
+		for ( int32_t i = 0; i < job->count; i++ ) {
+
+			const wchar_t* leaf = job->paths [ i ];
+
+			for ( const wchar_t* at = job->paths [ i ]; *at; at++ ) {
+
+				if ( *at == L'\\' || *at == L'/' )
+					leaf = at + 1;
+
+			}
+
+			char name [ 192 ];
+
+			if ( WideCharToMultiByte ( CP_UTF8, 0, leaf, -1, name, 180, nullptr, nullptr ) <= 1 )
+				continue;
+
+			for ( int32_t copy = 2; copy < 100; copy++ ) {
+
+				bool taken = false;
+
+				for ( int32_t j = 0; j < i; j++ )
+					taken = taken || base::same_text ( names [ j ], name );
+
+				if ( !taken )
+					break;
+
+				int32_t length = base::text_length ( name );
+
+				name [ length ] = ' ';
+				name [ length + 1 ] = static_cast < char > ( '0' + copy % 10 );
+				name [ length + 2 ] = 0;
+
+			}
+
+			for ( int32_t c = 0; c < 191 && name [ c ]; c++ ) {
+
+				names [ i ] [ c ] = name [ c ];
+				names [ i ] [ c + 1 ] = 0;
+
+			}
+
+			add_tree ( *builder, job->paths [ i ], name, job->files );
+
+		}
+
+		job->ok = job->files > 0 && builder->write ( job->target, error, sizeof ( error ) );
+		delete builder;
+		PostMessageW ( window, WM_APP + 4, 0, reinterpret_cast < LPARAM > ( job ) );
+
+		return 0;
+
+	}
+
+	static void send_files ( const wchar_t ( *paths ) [ MAX_PATH ], int32_t count ) {
+
+		if ( !running || !count )
+			return;
+
+		if ( machine->tools.connected ( ) && ( machine->tools.current_policy ( ) & pc::SHARE_FILES_IN ) ) {
+
+			if ( machine->tools.send_files ( paths, count, pc::PURPOSE_SENT, ~0ull ) )
+				toast ( L"Sending the files to the machine's desktop\x2026" );
+			else
+				toast ( L"Still sending the last files. Try again in a moment." );
+
+			return;
+
+		}
+
+		if ( sender ) {
+
+			toast ( L"Still copying the last files. Try again in a moment." );
+
+			return;
+
+		}
+
+		if ( !sent )
+			sent = static_cast < wchar_t ( * ) [ MAX_PATH ] > ( runtime_allocate_zero ( sizeof ( wchar_t ) * MAX_PATH * sent_room ) );
+
+		for ( int32_t i = 0; i < count && sent_count < sent_room; i++ ) {
+
+			bool known = false;
+
+			for ( int32_t j = 0; j < sent_count; j++ )
+				known = known || base::same_text ( sent [ j ], paths [ i ] );
+
+			if ( !known )
+				copy_wide ( sent [ sent_count++ ], paths [ i ], MAX_PATH );
+
+		}
+
+		send_job* job = new send_job ( );
+		wchar_t folder [ MAX_PATH ];
+		base::writer target;
+
+		if ( smoke || !vm::folder_of ( file_path, folder ) ) {
+
+			GetTempPathW ( MAX_PATH, folder );
+
+			int32_t length = 0;
+
+			while ( folder [ length ] )
+				length++;
+
+			if ( length && folder [ length - 1 ] == L'\\' )
+				folder [ length - 1 ] = 0;
+
+		}
+
+		sent_flip = 1 - sent_flip;
+		target.add ( folder ).add ( sent_flip ? L"\\sent-files-1.iso" : L"\\sent-files-2.iso" );
+		copy_wide ( job->target, target.text ( ), MAX_PATH );
+		job->count = sent_count;
+
+		for ( int32_t i = 0; i < sent_count; i++ )
+			copy_wide ( job->paths [ i ], sent [ i ], MAX_PATH );
+
+		sender = CreateThread ( nullptr, 0, &build_sent, job, 0, nullptr );
+
+		if ( !sender ) {
+
+			delete job;
+			toast ( L"Couldn't start copying the files" );
+
+			return;
+
+		}
+
+		toast ( L"Copying the files onto a disc for the machine\x2026" );
+
+	}
+
+	static void sent_ready ( send_job* job ) {
+
+		if ( sender ) {
+
+			WaitForSingleObject ( sender, INFINITE );
+			CloseHandle ( sender );
+			sender = nullptr;
+
+		}
+
+		if ( !job->ok ) {
+
+			toast ( L"Couldn't put those files on a disc" );
+			DeleteFileW ( job->target );
+			delete job;
+
+			return;
+
+		}
+
+		if ( running && machine->change_second_disc ( job->target ) ) {
+
+			if ( sent_disc [ 0 ] && !base::same_text ( sent_disc, job->target ) )
+				DeleteFileW ( sent_disc );
+
+			copy_wide ( sent_disc, job->target, MAX_PATH );
+
+			base::writer note;
+
+			note.add ( L"Sent " ).number ( job->files ).add ( job->files == 1 ? L" file" : L" files" ).add ( L". They're on the machine's second DVD drive." );
+			toast ( note.text ( ) );
+
+		} else {
+
+			DeleteFileW ( job->target );
+			toast ( L"The machine isn't running anymore" );
+
+		}
+
+		delete job;
+
+	}
+
+	static void pick_and_send ( ) {
 
 		set_capture ( false );
 
-		if ( !open_file ( window, FILE_IMAGE, path ) )
+		wchar_t ( *picked ) [ MAX_PATH ] = static_cast < wchar_t ( * ) [ MAX_PATH ] > ( runtime_allocate_zero ( sizeof ( wchar_t ) * MAX_PATH * sent_room ) );
+		int32_t count = open_files ( window, picked, sent_room );
+
+		send_files ( picked, count );
+		runtime_release ( picked );
+
+	}
+
+	static void install_tools_disc ( ) {
+
+		if ( !running )
 			return;
+
+		wchar_t self [ MAX_PATH ] = { };
+		wchar_t folder [ MAX_PATH ] = { };
+		wchar_t note_path [ MAX_PATH ] = { };
+		base::writer target;
+		char error [ 160 ] = { };
+
+		GetModuleFileNameW ( nullptr, self, MAX_PATH );
+
+		if ( smoke || !vm::folder_of ( file_path, folder ) ) {
+
+			GetTempPathW ( MAX_PATH, folder );
+
+			int32_t length = base::text_length ( folder );
+
+			if ( length && folder [ length - 1 ] == L'\\' )
+				folder [ length - 1 ] = 0;
+
+		}
+
+		target.add ( folder ).add ( L"\\coldboot-tools.iso" );
+
+		base::writer note;
+
+		note.add ( folder ).add ( L"\\coldboot-tools-readme.txt" );
+		copy_wide ( note_path, note.text ( ), MAX_PATH );
+
+		static const char readme [ ] =
+			"Coldboot Tools\r\n"
+			"\r\n"
+			"Run \"Coldboot Tools.exe\" inside the machine to install them for this user.\r\n"
+			"They start with Windows from then on and share the clipboard and files with your PC,\r\n"
+			"in whichever directions the machine's settings allow.\r\n";
+
+		pc::iso_builder* builder = new pc::iso_builder ( );
+
+		builder->set_label ( "COLDBOOT_TOOLS" );
+
+		bool ok = files::write ( note_path, readme, static_cast < int32_t > ( sizeof ( readme ) - 1 ) ) && builder->add_file ( "Coldboot Tools.exe", self ) && builder->add_file ( "Read me.txt", note_path );
+
+		if ( ok && sent_disc [ 0 ] && base::same_text ( sent_disc, target.text ( ) ) )
+			machine->change_second_disc ( nullptr );
+
+		ok = ok && builder->write ( target.text ( ), error, sizeof ( error ) );
+		delete builder;
+		DeleteFileW ( note_path );
+
+		if ( ok && machine->change_second_disc ( target.text ( ) ) ) {
+
+			if ( sent_disc [ 0 ] && !base::same_text ( sent_disc, target.text ( ) ) )
+				DeleteFileW ( sent_disc );
+
+			copy_wide ( sent_disc, target.text ( ), MAX_PATH );
+			toast ( L"Tools disc inserted. In the machine, open it and run Coldboot Tools.exe." );
+
+		} else
+			toast ( L"Couldn't make the tools disc" );
+
+	}
+
+	static void share_host_clipboard ( ) {
+
+		DWORD sequence = GetClipboardSequenceNumber ( );
+
+		if ( !running || sequence == ignore_sequence || !machine->tools.connected ( ) )
+			return;
+
+		uint32_t policy = machine->tools.current_policy ( );
+
+		if ( clipboard_has_files ( ) ) {
+
+			if ( !( policy & pc::SHARE_FILES_IN ) )
+				return;
+
+			wchar_t ( *paths ) [ MAX_PATH ] = static_cast < wchar_t ( * ) [ MAX_PATH ] > ( runtime_allocate_zero ( sizeof ( wchar_t ) * MAX_PATH * sent_room ) );
+			int32_t count = read_clipboard_files ( window, paths, sent_room );
+
+			if ( count && !machine->tools.send_files ( paths, count, pc::PURPOSE_CLIPBOARD, pc::clipboard_file_limit ) )
+				toast ( machine->tools.busy ( ) ? L"Still sending files to the machine, so this copy wasn't shared" : L"Those files are over 1 GB, so they weren't put on the machine's clipboard. Use Send files." );
+
+			runtime_release ( paths );
+
+			return;
+
+		}
+
+		if ( clipboard_has_text ( ) && ( policy & pc::SHARE_TEXT_IN ) ) {
+
+			base::list < wchar_t > text;
+
+			if ( read_clipboard_text ( window, text ) )
+				machine->tools.send_text ( text.data ( ), static_cast < uint32_t > ( text.size ( ) ) );
+
+		}
+
+	}
+
+	static void drain_tools ( ) {
+
+		pc::tools_event item;
+
+		while ( running && machine->tools.next_event ( item ) ) {
+
+			switch ( item.kind ) {
+
+				case pc::TOOLS_CONNECTED:
+					tools_linked = true;
+					toast ( L"Coldboot Tools connected. Copy and paste work with the machine now." );
+					break;
+
+				case pc::TOOLS_DISCONNECTED:
+					tools_linked = false;
+					break;
+
+				case pc::TOOLS_GOT_TEXT:
+
+					if ( !item.text.empty ( ) )
+						ignore_sequence = write_clipboard_text ( window, item.text.data ( ) );
+
+					break;
+
+				case pc::TOOLS_GOT_FILES: {
+
+					item.items.push ( 0 );
+					ignore_sequence = write_clipboard_files ( window, item.items.data ( ) );
+
+					base::writer note;
+
+					note.add ( L"Copied " ).number ( item.count ).add ( item.count == 1 ? L" item" : L" items" ).add ( L" from the machine. Paste them anywhere on your PC." );
+					toast ( note.text ( ) );
+					break;
+
+				}
+
+				case pc::TOOLS_SENT:
+
+					if ( item.purpose == pc::PURPOSE_SENT )
+						toast ( L"Sent. The files are in \"From your PC\" on the machine's desktop." );
+
+					break;
+
+				case pc::TOOLS_REFUSED:
+					toast ( L"The machine tried to share files with your PC, but this machine's settings don't allow it" );
+					break;
+
+				default:
+					break;
+
+			}
+
+		}
+
+	}
+
+	static void insert_path ( const wchar_t* path ) {
 
 		copy_wide ( file->iso, path, MAX_PATH );
 
@@ -709,6 +1308,49 @@ namespace app {
 		save_machine ( );
 		refresh_names ( );
 		render ( );
+
+	}
+
+	static void insert_disc ( ) {
+
+		wchar_t path [ MAX_PATH ];
+
+		set_capture ( false );
+
+		if ( open_file ( window, FILE_IMAGE, path ) )
+			insert_path ( path );
+
+	}
+
+	static void dropped ( HDROP drop ) {
+
+		wchar_t ( *paths ) [ MAX_PATH ] = static_cast < wchar_t ( * ) [ MAX_PATH ] > ( runtime_allocate_zero ( sizeof ( wchar_t ) * MAX_PATH * sent_room ) );
+		UINT total = DragQueryFileW ( drop, 0xFFFFFFFF, nullptr, 0 );
+		int32_t count = 0;
+
+		for ( UINT i = 0; i < total && count < sent_room; i++ ) {
+
+			if ( DragQueryFileW ( drop, i, paths [ count ], MAX_PATH ) )
+				count++;
+
+		}
+
+		DragFinish ( drop );
+
+		int32_t length = count == 1 ? base::text_length ( paths [ 0 ] ) : 0;
+		bool image = length > 4 && paths [ 0 ] [ length - 4 ] == L'.';
+
+		for ( int32_t i = 0; image && i < 3; i++ )
+			image = ( paths [ 0 ] [ length - 3 + i ] | 0x20 ) == L"iso" [ i ];
+
+		if ( image && running )
+			insert_path ( paths [ 0 ] );
+		else if ( running )
+			send_files ( paths, count );
+		else
+			toast ( L"Start the machine first, then drop files on it" );
+
+		runtime_release ( paths );
 
 	}
 
@@ -768,6 +1410,18 @@ namespace app {
 				take_screenshot ( );
 				return;
 
+			case ui::TOOL_FILES:
+				pick_and_send ( );
+				return;
+
+			case ui::TOOL_TYPE:
+				type_clipboard ( );
+				return;
+
+			case ui::TOOL_TOOLS:
+				install_tools_disc ( );
+				return;
+
 			case ui::TOOL_FULLSCREEN:
 				toggle_fullscreen ( );
 				return;
@@ -799,6 +1453,8 @@ namespace app {
 			return;
 
 		}
+
+		drain_tools ( );
 
 		bool ready = machine->pointer_ready ( );
 
@@ -833,6 +1489,7 @@ namespace app {
 				set_capture ( false );
 				save_preview ( );
 				MultiByteToWideChar ( CP_UTF8, 0, machine->problem, -1, problem, 255 );
+				stop_typing ( );
 				machine->power_off ( );
 				running = false;
 				failed = true;
@@ -936,6 +1593,18 @@ namespace app {
 
 			case WM_APP + 3:
 				take_screenshot ( );
+				return 0;
+
+			case WM_APP + 4:
+				sent_ready ( reinterpret_cast < send_job* > ( extra ) );
+				return 0;
+
+			case WM_DROPFILES:
+				dropped ( reinterpret_cast < HDROP > ( wide ) );
+				return 0;
+
+			case WM_CLIPBOARDUPDATE:
+				share_host_clipboard ( );
 				return 0;
 
 			case WM_INPUT:
@@ -1117,7 +1786,26 @@ namespace app {
 				if ( running )
 					save_preview ( );
 
+				stop_typing ( );
+
+				if ( sender ) {
+
+					WaitForSingleObject ( sender, INFINITE );
+					CloseHandle ( sender );
+					sender = nullptr;
+
+				}
+
 				machine->power_off ( );
+
+				if ( sent_disc [ 0 ] )
+					DeleteFileW ( sent_disc );
+
+				if ( clipboard_inbox [ 0 ] )
+					remove_tree ( clipboard_inbox );
+
+				RemoveClipboardFormatListener ( handle );
+
 				running = false;
 				file->window_x = place.rcNormalPosition.left;
 				file->window_y = place.rcNormalPosition.top;
@@ -1184,6 +1872,23 @@ namespace app {
 			return 1;
 
 		SetPropW ( window, vm::window_tag, reinterpret_cast < HANDLE > ( vm::running_hash ( path ) ) );
+		DragAcceptFiles ( window, TRUE );
+
+		if ( !smoke )
+			AddClipboardFormatListener ( window );
+
+		{
+
+			wchar_t temporary [ MAX_PATH ] = { };
+			base::writer inbox;
+
+			GetTempPathW ( MAX_PATH, temporary );
+			inbox.add ( temporary ).add ( L"Coldboot clipboard" );
+			CreateDirectoryW ( inbox.text ( ), nullptr );
+			inbox.add ( L"\\" ).number ( static_cast < int32_t > ( GetCurrentProcessId ( ) ) );
+			copy_wide ( clipboard_inbox, inbox.text ( ), MAX_PATH );
+
+		}
 
 		float factor = scale ( );
 		RECT bounds = { 0, 0, static_cast < LONG > ( 1060.0f * factor ), static_cast < LONG > ( 860.0f * factor ) };

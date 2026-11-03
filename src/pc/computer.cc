@@ -128,6 +128,7 @@ namespace pc {
 		delete router;
 		delete nic;
 		delete sound;
+		tools.router = nullptr;
 		router = nullptr;
 		nic = nullptr;
 		sound = nullptr;
@@ -226,9 +227,7 @@ namespace pc {
 			helper.open ( options.helper, false );
 
 		storage->attach ( 1, 0, DRIVE_OPTICAL, disc.present ( ) ? &disc : nullptr );
-
-		if ( helper.present ( ) )
-			storage->attach ( 1, 1, DRIVE_OPTICAL, &helper );
+		storage->attach ( 1, 1, DRIVE_OPTICAL, helper.present ( ) ? &helper : nullptr );
 
 		storage->reset ( );
 
@@ -252,12 +251,16 @@ namespace pc {
 		for ( const wchar_t* at = options.disk [ 0 ] ? options.disk : options.iso; *at; at++ )
 			links.seed = ( links.seed ^ static_cast < uint64_t > ( *at | 0x20 ) ) * 0x100000001B3ull;
 
-		if ( options.network ) {
+		{
 
 			uint8_t address [ 6 ] = { 0x02, 0xCB, static_cast < uint8_t > ( links.seed >> 24 ), static_cast < uint8_t > ( links.seed >> 32 ), static_cast < uint8_t > ( links.seed >> 40 ), static_cast < uint8_t > ( links.seed >> 48 | 1 ) };
 
 			nic = new e1000 ( *board, vm, 19, address );
 			router = new net::nat ( );
+			router->isolated = !options.network;
+			router->attach_service ( &tools );
+			tools.router = router;
+			tools.set_policy ( options.sharing );
 			vm.attach_memory ( nic->memory_base, e1000::memory_size, nic );
 			vm.attach_ports ( nic->io_base, static_cast < uint16_t > ( nic->io_base + 63 ), nic );
 			board->pci.attach ( 3, 0, nic );
@@ -267,6 +270,7 @@ namespace pc {
 
 				delete router;
 				router = nullptr;
+				tools.router = nullptr;
 				nic->connect ( nullptr );
 
 			}
@@ -454,6 +458,23 @@ namespace pc {
 
 		copy_wide ( options.iso, opened ? path : L"", MAX_PATH );
 		storage->change_media ( 1, 0, opened ? &disc : nullptr );
+		board->vm.unlock_devices ( );
+
+		return opened || !path || !path [ 0 ];
+
+	}
+
+	bool computer::change_second_disc ( const wchar_t* path ) {
+
+		if ( !board || !storage )
+			return false;
+
+		board->vm.lock_devices ( );
+		helper.close ( );
+
+		bool opened = path && path [ 0 ] && helper.open ( path, false );
+
+		storage->change_media ( 1, 1, opened ? &helper : nullptr );
 		board->vm.unlock_devices ( );
 
 		return opened || !path || !path [ 0 ];

@@ -36,6 +36,9 @@ namespace ui {
 		ACTION_BOOT,
 		ACTION_FIRMWARE,
 		ACTION_NETWORK,
+		ACTION_CLIPBOARD,
+		ACTION_FILE_SHARING,
+		ACTION_UNATTENDED,
 		ACTION_CATEGORY,
 		ACTION_COUNT,
 
@@ -82,6 +85,7 @@ namespace ui {
 		const wchar_t* mark = L"";
 		bool modern = false;
 		bool uefi = false;
+		bool windows = false;
 		uint32_t memory_mb = 0;
 		uint32_t processors = 1;
 		uint32_t disk_gb = 0;
@@ -141,6 +145,12 @@ namespace ui {
 		bool disk_first = false;
 		bool uefi = false;
 		bool network = true;
+		uint8_t clipboard = 3;
+		uint8_t file_sharing = 3;
+		bool windows = false;
+		bool unattended = true;
+		text_field user;
+		text_field password;
 		wchar_t iso [ path_room ] = { };
 		wchar_t disk [ path_room ] = { };
 
@@ -179,6 +189,14 @@ namespace ui {
 		void toast ( const wchar_t* text, double now );
 
 		bool name_valid ( ) const;
+
+		bool user_valid ( ) const;
+
+		bool asks_user ( ) const {
+
+			return sheet == SHEET_NEW && form.modern && form.windows && form.unattended;
+
+		}
 
 		void apply_preset ( int32_t index );
 
@@ -219,7 +237,19 @@ namespace ui {
 
 		float tool ( render::gpu& gpu, const theme& colors, float x, const wchar_t* label, render::icon_kind icon, manager_action action, bool enabled );
 
-		void field ( render::gpu& gpu, const theme& colors, render::rect area, double now );
+		void field ( render::gpu& gpu, const theme& colors, render::rect area, double now, int32_t which, const wchar_t* placeholder, bool masked );
+
+		text_field& active_field ( ) {
+
+			return focus == 1 ? form.user : ( focus == 2 ? form.password : form.name );
+
+		}
+
+		const text_field& active_field ( ) const {
+
+			return focus == 1 ? form.user : ( focus == 2 ? form.password : form.name );
+
+		}
 
 		void segmented ( render::gpu& gpu, const theme& colors, render::rect area, const wchar_t* const* labels, int32_t count, int32_t selected, manager_action action, bool enabled );
 
@@ -244,6 +274,8 @@ namespace ui {
 		float paint_pc_system ( render::gpu& gpu, const theme& colors, float x, float y, float inner, bool enabled, bool full );
 
 		float paint_pc_storage ( render::gpu& gpu, const theme& colors, float x, float y, float inner, bool enabled, bool creating );
+
+		float paint_pc_sharing ( render::gpu& gpu, const theme& colors, float x, float y, float inner, bool enabled );
 
 		float paint_xt_system ( render::gpu& gpu, const theme& colors, float x, float y, float inner, bool enabled );
 
@@ -276,7 +308,8 @@ namespace ui {
 		float sheet_amount = 0.0f;
 		sheet_kind shown = SHEET_NONE;
 		render::rect sheet_area;
-		render::rect field_area;
+		render::rect field_areas [ 3 ];
+		int32_t focus = 0;
 		bool field_focused = false;
 		double caret_since = 0.0;
 		render::gpu* measurer = nullptr;

@@ -484,7 +484,7 @@ namespace vm {
 		if ( settings && settings->disk [ 0 ] && folder_of ( settings->disk, owner ) && same_path ( owner, folder ) && !erase_file ( settings->disk ) )
 			return false;
 
-		static const wchar_t* const leftovers [ ] = { L"\\preview.bin", L"\\preview.bin.new", L"\\nvram.bin", L"\\setup-helper-2.iso" };
+		static const wchar_t* const leftovers [ ] = { L"\\preview.bin", L"\\preview.bin.new", L"\\nvram.bin", L"\\setup-helper-2.iso", L"\\sent-files-1.iso", L"\\sent-files-2.iso", L"\\coldboot-tools.iso", L"\\setup-answers.iso" };
 
 		for ( const wchar_t* name : leftovers ) {
 

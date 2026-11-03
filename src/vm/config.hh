@@ -59,6 +59,9 @@ namespace vm {
 		bool disk_first = false;
 		bool uefi = false;
 		bool network = true;
+		uint8_t clipboard = 3;
+		uint8_t file_sharing = 3;
+		bool unattended = false;
 		wchar_t iso [ MAX_PATH ] = { };
 		wchar_t disk [ MAX_PATH ] = { };
 		bool turbo = false;

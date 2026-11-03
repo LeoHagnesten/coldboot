@@ -4,6 +4,7 @@
 #include "render/gpu.hh"
 #include "ui/manager.hh"
 #include "vm/library.hh"
+#include "vm/unattend.hh"
 #include <windows.h>
 #include <dwmapi.h>
 #include <shellapi.h>
@@ -404,6 +405,11 @@ namespace app {
 		view->form.name.set ( name );
 		view->form.name.anchor = 0;
 
+		wchar_t user [ 32 ];
+
+		vm::default_user_name ( user, 32 );
+		view->form.user.set ( user );
+
 		if ( image )
 			copy_text ( view->form.iso, image, ui::path_room );
 
@@ -453,6 +459,8 @@ namespace app {
 		out.disk_first = form.disk_first;
 		out.uefi = form.uefi;
 		out.network = form.network;
+		out.clipboard = form.clipboard;
+		out.file_sharing = form.file_sharing;
 		copy_text ( out.iso, form.iso, MAX_PATH );
 		copy_text ( out.disk, form.disk_mode == 1 || view->sheet == ui::SHEET_SETTINGS ? form.disk : L"", MAX_PATH );
 
@@ -477,13 +485,42 @@ namespace app {
 		}
 
 		uint64_t disk_bytes = view->form.modern && view->form.disk_mode == 0 ? static_cast < uint64_t > ( view->form.disk_gb ) << 30 : 0;
+		bool answering = view->asks_user ( ) && view->user_valid ( );
+
+		settings->unattended = answering;
+
 		bool made = shelf->create ( *settings, home, path, error, sizeof ( error ), disk_bytes );
 
 		if ( made ) {
 
 			base::writer note;
+			wchar_t folder [ MAX_PATH ];
 
 			note.add ( L"Created \x201C" ).add ( settings->name ).add ( L"\x201D" );
+
+			if ( answering && vm::folder_of ( path, folder ) ) {
+
+				vm::setup_answers* answers = new vm::setup_answers ( );
+				wchar_t disc [ MAX_PATH ];
+				char problem [ 160 ] = { };
+
+				copy_text ( answers->user, view->form.user.text, 64 );
+				copy_text ( answers->password, view->form.password.text, 64 );
+				answers->uefi = view->form.uefi;
+				answers->windows11 = base::same_text ( settings->os, "windows11" );
+				vm::image_language ( view->form.iso, answers->language, sizeof ( answers->language ) );
+
+				if ( !vm::write_setup_disc ( folder, *answers, disc, problem, sizeof ( problem ) ) )
+					{
+
+					note.clear ( );
+					note.add ( L"Created the machine, but couldn't write its setup answers, so Windows Setup will ask its usual questions" );
+
+				}
+
+				delete answers;
+
+			}
 			view->close_sheet ( );
 			select ( shelf->find ( path ) );
 			toast ( note.text ( ) );
@@ -524,6 +561,8 @@ namespace app {
 		view->form.disk_first = source.disk_first;
 		view->form.uefi = source.uefi;
 		view->form.network = source.network;
+		view->form.clipboard = source.clipboard;
+		view->form.file_sharing = source.file_sharing;
 		view->form.disk_mode = source.disk [ 0 ] ? 1 : 2;
 		copy_text ( view->form.iso, source.iso, ui::path_room );
 		copy_text ( view->form.disk, source.disk, ui::path_room );
@@ -1252,6 +1291,7 @@ namespace app {
 			choices [ i ].processors = table [ i ].processors;
 			choices [ i ].disk_gb = table [ i ].disk_gb;
 			choices [ i ].uefi = base::same_text ( table [ i ].id, "windows11" );
+			choices [ i ].windows = base::same_text ( table [ i ].id, "windows11" ) || base::same_text ( table [ i ].id, "windows10" );
 
 		}
 

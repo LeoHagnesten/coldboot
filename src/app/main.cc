@@ -25,6 +25,10 @@ namespace app {
 
 	int computer_main ( const wchar_t* path, vm::config& machine_file, const settings& theme, const wchar_t* smoke_path );
 
+	bool tools_wanted ( wchar_t** arguments, int32_t count );
+
+	int32_t tools_main ( wchar_t** arguments, int32_t count );
+
 }
 
 static constexpr UINT_PTR animation_timer = 1;
@@ -1173,6 +1177,17 @@ int program_main ( ) {
 	bool files_given = false;
 	int32_t argument_count = 0;
 	wchar_t** arguments = CommandLineToArgvW ( GetCommandLineW ( ), &argument_count );
+
+	if ( app::tools_wanted ( arguments, argument_count ) ) {
+
+		int32_t result = app::tools_main ( arguments, argument_count );
+
+		if ( arguments )
+			LocalFree ( arguments );
+
+		return result;
+
+	}
 
 	for ( int32_t i = 1; arguments && i < argument_count; i++ ) {
 

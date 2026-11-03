@@ -1,5 +1,6 @@
 #include "ui/manager.hh"
 #include "base/math.hh"
+#include "vm/unattend.hh"
 #include <windows.h>
 
 namespace ui {
@@ -245,18 +246,20 @@ namespace ui {
 
 	int32_t manager::caret_from ( float x ) const {
 
-		if ( !measurer )
-			return form.name.length;
+		const text_field& current = active_field ( );
 
-		float target = x - ( field_area.x + 10.0f );
+		if ( !measurer )
+			return current.length;
+
+		float target = x - ( field_areas [ focus ].x + 10.0f );
 		int32_t best = 0;
 		float distance = 1e9f;
 		wchar_t prefix [ text_field::room + 1 ];
 
-		for ( int32_t i = 0; i <= form.name.length; i++ ) {
+		for ( int32_t i = 0; i <= current.length; i++ ) {
 
 			for ( int32_t j = 0; j < i; j++ )
-				prefix [ j ] = form.name.text [ j ];
+				prefix [ j ] = focus == 2 ? L'\x2022' : current.text [ j ];
 
 			prefix [ i ] = 0;
 
@@ -285,8 +288,9 @@ namespace ui {
 		if ( press_action == ACTION_FIELD && editing ( ) ) {
 
 			field_focused = true;
+			focus = base::clamp ( press_index, 0, 2 );
 			caret_since = now;
-			form.name.move ( caret_from ( x ), GetKeyState ( VK_SHIFT ) < 0 );
+			active_field ( ).move ( caret_from ( x ), GetKeyState ( VK_SHIFT ) < 0 );
 
 		} else if ( sheet != SHEET_NONE )
 			field_focused = false;
@@ -349,6 +353,11 @@ namespace ui {
 			form.uefi = item.uefi;
 
 		}
+
+		form.windows = item.windows;
+
+		if ( !form.windows && focus )
+			focus = 0;
 
 	}
 
@@ -422,6 +431,22 @@ namespace ui {
 				form.network = index == 0;
 				return ACTION_NONE;
 
+			case ACTION_CLIPBOARD:
+				form.clipboard = static_cast < uint8_t > ( index & 3 );
+				return ACTION_NONE;
+
+			case ACTION_FILE_SHARING:
+				form.file_sharing = static_cast < uint8_t > ( index & 3 );
+				return ACTION_NONE;
+
+			case ACTION_UNATTENDED:
+				form.unattended = index == 0;
+
+				if ( !form.unattended && focus )
+					focus = 0;
+
+				return ACTION_NONE;
+
 			case ACTION_CATEGORY:
 				category = index;
 				field_focused = index == 0 && editing ( );
@@ -468,7 +493,7 @@ namespace ui {
 
 			if ( code == VK_RETURN ) {
 
-				if ( sheet == SHEET_NEW && name_valid ( ) )
+				if ( sheet == SHEET_NEW && name_valid ( ) && ( !asks_user ( ) || user_valid ( ) ) )
 					return ACTION_CREATE;
 
 				if ( sheet == SHEET_SETTINGS && editing ( ) && name_valid ( ) )
@@ -480,7 +505,18 @@ namespace ui {
 
 			if ( code == VK_TAB && editing ( ) ) {
 
-				field_focused = !field_focused;
+				if ( asks_user ( ) ) {
+
+					focus = field_focused ? ( focus + ( shift ? 2 : 1 ) ) % 3 : 0;
+					field_focused = true;
+
+				} else {
+
+					focus = 0;
+					field_focused = !field_focused;
+
+				}
+
 				caret_since = last_paint;
 
 				return ACTION_NONE;
@@ -490,7 +526,7 @@ namespace ui {
 			if ( !field_focused || !editing ( ) )
 				return ACTION_NONE;
 
-			text_field& name = form.name;
+			text_field& name = active_field ( );
 
 			caret_since = last_paint;
 
@@ -545,7 +581,7 @@ namespace ui {
 
 		wchar_t text [ 2 ] = { value, 0 };
 
-		form.name.insert ( text );
+		active_field ( ).insert ( text );
 		caret_since = last_paint;
 
 	}
@@ -553,7 +589,13 @@ namespace ui {
 	void manager::paste ( const wchar_t* value ) {
 
 		if ( field_focused && editing ( ) && value )
-			form.name.insert ( value );
+			active_field ( ).insert ( value );
+
+	}
+
+	bool manager::user_valid ( ) const {
+
+		return vm::user_name_valid ( form.user.text );
 
 	}
 
@@ -598,6 +640,7 @@ namespace ui {
 		sheet = kind;
 		sheet_since = now;
 		category = 0;
+		focus = 0;
 		dragging = -1;
 		field_focused = kind == SHEET_NEW || ( kind == SHEET_SETTINGS && !subject_running );
 		caret_since = now;
@@ -720,19 +763,23 @@ namespace ui {
 
 	}
 
-	void manager::field ( render::gpu& gpu, const theme& colors, rect area, double now ) {
+	void manager::field ( render::gpu& gpu, const theme& colors, rect area, double now, int32_t which, const wchar_t* placeholder, bool masked ) {
 
-		const text_field& name = form.name;
-		bool active = field_focused && editing ( );
+		const text_field& name = which == 1 ? form.user : ( which == 2 ? form.password : form.name );
+		bool active = field_focused && editing ( ) && focus == which;
 		float left = area.x + 10.0f;
 		int32_t from = 0;
 		int32_t to = 0;
 		wchar_t prefix [ text_field::room + 1 ];
+		wchar_t shown [ text_field::room + 1 ];
+
+		for ( int32_t j = 0; j <= name.length; j++ )
+			shown [ j ] = masked && j < name.length ? L'\x2022' : name.text [ j ];
 
 		auto offset = [ & ] ( int32_t count ) {
 
 			for ( int32_t j = 0; j < count; j++ )
-				prefix [ j ] = name.text [ j ];
+				prefix [ j ] = shown [ j ];
 
 			prefix [ count ] = 0;
 
@@ -740,7 +787,7 @@ namespace ui {
 
 		};
 
-		field_area = area;
+		field_areas [ which ] = area;
 		gpu.fill ( area, corner, colors.inset );
 		gpu.stroke ( area, corner, 1.0f, active ? colors.accent : colors.divider );
 
@@ -757,9 +804,9 @@ namespace ui {
 		}
 
 		if ( name.length )
-			gpu.text ( name.text, render::FONT_BODY, rect { left, area.y, area.w - 20.0f, area.h }, editing ( ) ? colors.text : colors.muted, render::ALIGN_LEFT );
+			gpu.text ( shown, render::FONT_BODY, rect { left, area.y, area.w - 20.0f, area.h }, editing ( ) ? colors.text : colors.muted, render::ALIGN_LEFT );
 		else if ( !active )
-			gpu.text ( L"Machine name", render::FONT_BODY, rect { left, area.y, area.w - 20.0f, area.h }, colors.faint, render::ALIGN_LEFT );
+			gpu.text ( placeholder, render::FONT_BODY, rect { left, area.y, area.w - 20.0f, area.h }, colors.faint, render::ALIGN_LEFT );
 
 		if ( active && ( static_cast < int64_t > ( ( now - caret_since ) / 0.53 ) & 1 ) == 0 ) {
 
@@ -770,7 +817,7 @@ namespace ui {
 		}
 
 		if ( editing ( ) )
-			add_hit ( area, ACTION_FIELD );
+			add_hit ( area, ACTION_FIELD, which );
 
 	}
 
@@ -1263,7 +1310,7 @@ namespace ui {
 
 		static const wchar_t* const boot_labels [ 2 ] = { L"CD/DVD first", L"Hard disk first" };
 		static const wchar_t* const firmware_labels [ 2 ] = { L"BIOS", L"UEFI" };
-		static const wchar_t* const network_labels [ 2 ] = { L"NAT", L"Off" };
+		static const wchar_t* const network_labels [ 2 ] = { L"Internet (NAT)", L"No internet" };
 		float control_x = x + label_column;
 		float track = inner - label_column - 96.0f;
 		color label_tint = enabled ? colors.muted : colors.faint;
@@ -1312,6 +1359,39 @@ namespace ui {
 
 	}
 
+	float manager::paint_pc_sharing ( render::gpu& gpu, const theme& colors, float x, float y, float inner, bool enabled ) {
+
+		static const wchar_t* const share_labels [ 4 ] = { L"Off", L"To machine", L"From machine", L"Both ways" };
+		float control_x = x + label_column;
+		color label_tint = enabled ? colors.muted : colors.faint;
+
+		gpu.text ( L"Clipboard", render::FONT_BODY, rect { x, y, label_column, control_height }, label_tint, render::ALIGN_LEFT );
+		segmented ( gpu, colors, rect { control_x, y, inner - label_column, control_height }, share_labels, 4, form.clipboard & 3, ACTION_CLIPBOARD, enabled );
+		y += control_height + 10.0f;
+		gpu.text ( L"Files", render::FONT_BODY, rect { x, y, label_column, control_height }, label_tint, render::ALIGN_LEFT );
+		segmented ( gpu, colors, rect { control_x, y, inner - label_column, control_height }, share_labels, 4, form.file_sharing & 3, ACTION_FILE_SHARING, enabled );
+		y += control_height + 14.0f;
+
+		static const wchar_t* const notes [ 4 ] = {
+
+			L"Text copied on one side pastes on the other. Files copied in Explorer paste as files.",
+			L"\"To machine\" only lets things into the machine, which keeps your PC safe from it.",
+			L"Sharing needs Coldboot Tools in the machine. Its window has an Install tools button.",
+			L"Clipboard files are limited to 1 GB. Send files and drag and drop have no limit.",
+
+		};
+
+		for ( const wchar_t* note : notes ) {
+
+			gpu.text ( note, render::FONT_SMALL, rect { control_x, y, inner - label_column, 18.0f }, colors.faint, render::ALIGN_LEFT );
+			y += 20.0f;
+
+		}
+
+		return y;
+
+	}
+
 	float manager::paint_pc_storage ( render::gpu& gpu, const theme& colors, float x, float y, float inner, bool enabled, bool creating ) {
 
 		static const wchar_t* const disk_labels [ 3 ] = { L"New disk", L"Existing\x2026", L"None" };
@@ -1355,9 +1435,9 @@ namespace ui {
 		bool remove = shown == SHEET_REMOVE;
 		bool settings = shown == SHEET_SETTINGS;
 		bool enabled = editing ( );
-		float sheet_width = remove ? 460.0f : ( settings ? 700.0f : 600.0f );
+		float sheet_width = remove ? 460.0f : ( settings ? 700.0f : 660.0f );
 		float content = 60.0f;
-		int32_t rows = ( state.preset_count + 1 ) / 2;
+		int32_t rows = ( state.preset_count + 2 ) / 3;
 
 		if ( shown == SHEET_NEW ) {
 
@@ -1368,11 +1448,14 @@ namespace ui {
 				content += 40.0f + 40.0f + 40.0f + 22.0f + 40.0f;
 				content += form.disk_mode == 0 ? 40.0f + 18.0f : ( form.disk_mode == 1 ? 18.0f : 0.0f );
 
+				if ( form.windows )
+					content += 40.0f + ( form.unattended ? 40.0f + 40.0f + 20.0f : 0.0f );
+
 			} else
 				content += 40.0f + 66.0f + 80.0f;
 
 		} else if ( settings )
-			content = 250.0f + ( subject_running ? 44.0f : 0.0f );
+			content = 300.0f + ( subject_running ? 44.0f : 0.0f );
 
 		float sheet_height = 56.0f + content + 12.0f + 56.0f;
 		rect card = { math::round ( ( width - sheet_width ) * 0.5f ), math::round ( base::max ( ( height - sheet_height ) * 0.5f, 12.0f ) + ( 1.0f - sheet_amount ) * 6.0f ), sheet_width, sheet_height };
@@ -1423,12 +1506,13 @@ namespace ui {
 
 		if ( settings ) {
 
-			static const wchar_t* const pages [ 3 ] = { L"General", L"System", L"Storage" };
+			static const wchar_t* const pages [ 4 ] = { L"General", L"System", L"Storage", L"Sharing" };
 			float nav = 150.0f;
+			int32_t page_count = form.modern ? 4 : 3;
 
 			gpu.fill ( rect { card.x + nav, card.y + 56.0f, 1.0f, footer - card.y - 56.0f }, 0.0f, colors.divider );
 
-			for ( int32_t i = 0; i < 3; i++ ) {
+			for ( int32_t i = 0; i < page_count; i++ ) {
 
 				rect item = { card.x + 8.0f, card.y + 56.0f + static_cast < float > ( i ) * 34.0f, nav - 16.0f, 30.0f };
 
@@ -1462,7 +1546,7 @@ namespace ui {
 			if ( category == 0 ) {
 
 				gpu.text ( L"Name", render::FONT_BODY, rect { x, y, label_column, control_height }, enabled ? colors.muted : colors.faint, render::ALIGN_LEFT );
-				field ( gpu, colors, rect { x + label_column, y, inner - label_column, control_height }, now );
+				field ( gpu, colors, rect { x + label_column, y, inner - label_column, control_height }, now, 0, L"Machine name", false );
 				y += control_height;
 
 				if ( form.name.length && !name_valid ( ) )
@@ -1485,7 +1569,9 @@ namespace ui {
 				else
 					paint_xt_system ( gpu, colors, x, y, inner, enabled );
 
-			} else if ( form.modern )
+			} else if ( category == 3 && form.modern )
+				paint_pc_sharing ( gpu, colors, x, y, inner, enabled );
+			else if ( form.modern )
 				paint_pc_storage ( gpu, colors, x, y, inner, enabled, false );
 			else
 				paint_xt_storage ( gpu, colors, x, y, inner, enabled );
@@ -1499,7 +1585,7 @@ namespace ui {
 		}
 
 		gpu.text ( L"Name", render::FONT_BODY, rect { x, y, label_column, control_height }, colors.muted, render::ALIGN_LEFT );
-		field ( gpu, colors, rect { x + label_column, y, inner - label_column, control_height }, now );
+		field ( gpu, colors, rect { x + label_column, y, inner - label_column, control_height }, now, 0, L"Machine name", false );
 		y += control_height;
 
 		if ( form.name.length && !name_valid ( ) )
@@ -1508,12 +1594,12 @@ namespace ui {
 		y += 24.0f;
 		gpu.text ( L"Type", render::FONT_BODY, rect { x, y, label_column, 34.0f }, colors.muted, render::ALIGN_LEFT );
 
-		float column = ( inner - label_column - 8.0f ) * 0.5f;
+		float column = ( inner - label_column - 16.0f ) / 3.0f;
 
 		for ( int32_t i = 0; i < state.preset_count; i++ ) {
 
 			const preset_card& item = state.presets [ i ];
-			rect option = { x + label_column + static_cast < float > ( i % 2 ) * ( column + 8.0f ), y + static_cast < float > ( i / 2 ) * 36.0f, column, 32.0f };
+			rect option = { x + label_column + static_cast < float > ( i % 3 ) * ( column + 8.0f ), y + static_cast < float > ( i / 3 ) * 36.0f, column, 32.0f };
 			bool chosen = form.preset == i;
 
 			gpu.fill ( option, corner, chosen ? fade ( colors.accent, 0.1f ) : colors.inset );
@@ -1542,7 +1628,33 @@ namespace ui {
 		if ( form.modern ) {
 
 			y = paint_pc_storage ( gpu, colors, x, y, inner, true, true );
-			paint_pc_system ( gpu, colors, x, y, inner, true, false );
+			y = paint_pc_system ( gpu, colors, x, y, inner, true, false );
+
+			if ( form.windows ) {
+
+				static const wchar_t* const setup_labels [ 2 ] = { L"Automatic", L"Ask me" };
+				float control_x = x + label_column;
+
+				gpu.text ( L"Windows setup", render::FONT_BODY, rect { x, y, label_column, control_height }, colors.muted, render::ALIGN_LEFT );
+				segmented ( gpu, colors, rect { control_x, y, inner - label_column, control_height }, setup_labels, 2, form.unattended ? 0 : 1, ACTION_UNATTENDED, true );
+				y += control_height + 10.0f;
+
+				if ( form.unattended ) {
+
+					gpu.text ( L"User name", render::FONT_BODY, rect { x, y, label_column, control_height }, colors.muted, render::ALIGN_LEFT );
+					field ( gpu, colors, rect { control_x, y, inner - label_column, control_height }, now, 1, L"Your account in Windows", false );
+					y += control_height + 10.0f;
+					gpu.text ( L"Password", render::FONT_BODY, rect { x, y, label_column, control_height }, colors.muted, render::ALIGN_LEFT );
+					field ( gpu, colors, rect { control_x, y, inner - label_column, control_height }, now, 2, L"None", true );
+					y += control_height + 4.0f;
+
+					const wchar_t* note = form.user.length && !user_valid ( ) ? L"User names are up to 20 characters, without \" / \\ [ ] : ; | = , + * ? < > @ %" : L"Setup runs by itself, makes this account, turns the privacy options off and installs Coldboot Tools.";
+
+					gpu.text ( note, render::FONT_SMALL, rect { control_x, y, inner - label_column, 16.0f }, form.user.length && !user_valid ( ) ? colors.danger : colors.faint, render::ALIGN_LEFT );
+
+				}
+
+			}
 
 		} else
 			paint_machine_fields ( gpu, colors, x, y, inner, true );
@@ -1551,7 +1663,7 @@ namespace ui {
 
 		place.add ( L"Saved in " ).add ( state.location );
 		gpu.text ( place.text ( ), render::FONT_SMALL, rect { x, buttons, inner - 88.0f - 8.0f - 80.0f - 16.0f, control_height }, colors.faint, render::ALIGN_LEFT );
-		button ( gpu, colors, rect { card.right ( ) - 20.0f - 88.0f, buttons, 88.0f, control_height }, L"Create", ACTION_CREATE, 0, name_valid ( ) && ( !form.modern || form.disk_mode != 1 || form.disk [ 0 ] ) );
+		button ( gpu, colors, rect { card.right ( ) - 20.0f - 88.0f, buttons, 88.0f, control_height }, L"Create", ACTION_CREATE, 0, name_valid ( ) && ( !asks_user ( ) || user_valid ( ) ) && ( !form.modern || form.disk_mode != 1 || form.disk [ 0 ] ) );
 		button ( gpu, colors, rect { card.right ( ) - 20.0f - 88.0f - 8.0f - 80.0f, buttons, 80.0f, control_height }, L"Cancel", ACTION_CANCEL, 1, true );
 		gpu.opacity = 1.0f;
 

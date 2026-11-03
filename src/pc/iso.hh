@@ -55,4 +55,6 @@ namespace pc {
 
 	};
 
+	bool iso_read_file ( const wchar_t* image, const char* path, base::list < uint8_t >& out, uint32_t limit );
+
 }
