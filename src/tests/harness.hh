@@ -40,4 +40,10 @@ namespace tests {
 
 	int32_t capture_main ( wchar_t** arguments, int32_t count );
 
+	int32_t computer_main ( wchar_t** arguments, int32_t count );
+
+	int32_t make_iso_main ( wchar_t** arguments, int32_t count );
+
+	void modern_tests ( );
+
 }

@@ -343,17 +343,6 @@ namespace app {
 
 		const wchar_t* path = shelf->at ( selected ).path;
 
-		if ( shelf->at ( selected ).settings.machine == vm::MACHINE_PC ) {
-
-			if ( smoke )
-				smoke_report->add ( L"start held back for a modern PC\r\n" );
-
-			toast ( L"Modern PCs can't start yet. Their firmware is the milestone in progress." );
-
-			return;
-
-		}
-
 		if ( vm::is_running ( path ) ) {
 
 			HWND other = vm::find_window ( path );

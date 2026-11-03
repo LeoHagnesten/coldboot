@@ -23,6 +23,8 @@ namespace app {
 
 	int manager_main ( const wchar_t* smoke_path );
 
+	int computer_main ( const wchar_t* path, vm::config& machine_file, const settings& theme, const wchar_t* smoke_path );
+
 }
 
 static constexpr UINT_PTR animation_timer = 1;
@@ -1275,6 +1277,9 @@ int program_main ( ) {
 			return 0;
 
 		}
+
+		if ( machine_file->machine == vm::MACHINE_PC )
+			return app::computer_main ( machine_path, *machine_file, config, smoke ? smoke_folder : nullptr );
 
 		settings_from_machine ( *machine_file, config );
 

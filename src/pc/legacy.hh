@@ -111,6 +111,7 @@ namespace pc {
 
 		uint8_t post_code = 0;
 		uint8_t port92 = 0x02;
+		uint8_t reset_control = 0;
 
 	private:
 

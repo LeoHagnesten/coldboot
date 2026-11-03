@@ -461,6 +461,9 @@ namespace pc {
 		if ( port == 0x92 )
 			return port92;
 
+		if ( port == 0xCF9 )
+			return reset_control;
+
 		return port == 0xE9 ? 0xE9 : 0xFF;
 
 	}
@@ -481,6 +484,13 @@ namespace pc {
 
 			if ( reset )
 				bus.request_reset ( );
+
+		} else if ( port == 0xCF9 ) {
+
+			if ( ( byte & 0x04 ) && !( reset_control & 0x04 ) )
+				bus.request_reset ( );
+
+			reset_control = static_cast < uint8_t > ( byte & 0x0A );
 
 		}
 

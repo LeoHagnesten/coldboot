@@ -1,0 +1,1082 @@
+#include "app/dialogs.hh"
+#include "app/settings.hh"
+#include "base/files.hh"
+#include "base/png.hh"
+#include "pc/computer.hh"
+#include "render/gpu.hh"
+#include "ui/console.hh"
+#include "vm/library.hh"
+#include <windows.h>
+#include <dwmapi.h>
+
+namespace app {
+
+	static constexpr UINT_PTR frame_timer = 1;
+	static constexpr UINT_PTR smoke_timer = 2;
+
+	static pc::computer* machine = nullptr;
+	static ui::console* frontend = nullptr;
+	static render::gpu* display = nullptr;
+	static vm::config* file = nullptr;
+	static const wchar_t* file_path = nullptr;
+	static const settings* global = nullptr;
+	static HWND window = nullptr;
+	static HHOOK keyboard_hook = nullptr;
+	static uint32_t* frame = nullptr;
+	static int32_t frame_width = 0;
+	static int32_t frame_height = 0;
+	static bool running = false;
+	static bool failed = false;
+	static bool captured = false;
+	static bool fullscreen = false;
+	static bool light = false;
+	static bool smoke = false;
+	static bool host_down = false;
+	static bool host_used = false;
+	static bool held [ 2 ] [ 128 ] = { };
+	static uint8_t buttons = 0;
+	static long disc_seen = 0;
+	static long disk_seen = 0;
+	static double disc_until = 0.0;
+	static double disk_until = 0.0;
+	static double smoke_started = 0.0;
+	static int32_t smoke_step = 0;
+	static wchar_t smoke_folder [ MAX_PATH ] = { };
+	static wchar_t problem [ 256 ] = { };
+	static wchar_t disc_name [ MAX_PATH ] = { };
+	static wchar_t disk_name [ MAX_PATH ] = { };
+	static WINDOWPLACEMENT saved_place = { sizeof ( WINDOWPLACEMENT ) };
+	static LARGE_INTEGER frequency;
+
+	static double now_seconds ( ) {
+
+		LARGE_INTEGER counter;
+
+		QueryPerformanceCounter ( &counter );
+
+		return static_cast < double > ( counter.QuadPart ) / static_cast < double > ( frequency.QuadPart );
+
+	}
+
+	static float scale ( ) {
+
+		return static_cast < float > ( GetDpiForWindow ( window ) ) / 96.0f;
+
+	}
+
+	static void copy_wide ( wchar_t* out, const wchar_t* text, int32_t room ) {
+
+		int32_t length = 0;
+
+		for ( ; text && text [ length ] && length < room - 1; length++ )
+			out [ length ] = text [ length ];
+
+		out [ length ] = 0;
+
+	}
+
+	static const wchar_t* leaf ( const wchar_t* path ) {
+
+		const wchar_t* name = path;
+
+		for ( const wchar_t* at = path; *at; at++ ) {
+
+			if ( *at == L'\\' || *at == L'/' )
+				name = at + 1;
+
+		}
+
+		return name;
+
+	}
+
+	static void save_machine ( ) {
+
+		if ( !smoke )
+			vm::save ( file_path, *file );
+
+	}
+
+	static void apply_theme ( ) {
+
+		light = use_light ( *global );
+
+		BOOL dark = light ? FALSE : TRUE;
+		COLORREF caption = light ? RGB ( 0xEE, 0xEE, 0xEC ) : RGB ( 0x17, 0x18, 0x1B );
+		COLORREF text = light ? RGB ( 0x1B, 0x1C, 0x1F ) : RGB ( 0xE4, 0xE5, 0xE7 );
+
+		DwmSetWindowAttribute ( window, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof ( dark ) );
+		DwmSetWindowAttribute ( window, 35, &caption, sizeof ( caption ) );
+		DwmSetWindowAttribute ( window, 36, &text, sizeof ( text ) );
+
+	}
+
+	static void render ( ) {
+
+		if ( !display || !display->ready ( ) )
+			return;
+
+		RECT client;
+		float factor = scale ( );
+		double now = now_seconds ( );
+
+		GetClientRect ( window, &client );
+		display->set_dpi ( 96.0f * factor );
+		display->resize ( client.right, client.bottom );
+		frontend->layout ( static_cast < float > ( client.right ) / factor, static_cast < float > ( client.bottom ) / factor, fullscreen );
+
+		if ( running ) {
+
+			int32_t width = 0;
+			int32_t height = 0;
+
+			if ( machine->screen ( frame, width, height, now ) ) {
+
+				frame_width = width;
+				frame_height = height;
+
+			}
+
+			long disc_count = machine->disc.activity;
+			long disk_count = machine->drive.activity;
+
+			if ( disc_count != disc_seen ) {
+
+				disc_seen = disc_count;
+				disc_until = now + 0.12;
+
+			}
+
+			if ( disk_count != disk_seen ) {
+
+				disk_seen = disk_count;
+				disk_until = now + 0.12;
+
+			}
+
+		}
+
+		ui::console_view view;
+
+		view.light = light;
+		view.running = running;
+		view.failed = failed;
+		view.captured = captured;
+		view.fullscreen = fullscreen;
+		view.pixels = running && frame_width ? frame : nullptr;
+		view.frame_width = frame_width;
+		view.frame_height = frame_height;
+		view.problem = problem;
+		view.disc = disc_name;
+		view.disk = disk_name;
+		view.processors = file->processors;
+		view.memory_mb = file->memory_mb;
+		view.disc_light = now < disc_until;
+		view.disk_light = now < disk_until;
+		frontend->paint ( *display, view, now );
+		display->end ( );
+
+	}
+
+	static void toast ( const wchar_t* text ) {
+
+		frontend->toast ( text, now_seconds ( ) );
+		render ( );
+
+	}
+
+	static void refresh_names ( ) {
+
+		copy_wide ( disc_name, file->iso [ 0 ] && machine->disc.present ( ) ? leaf ( file->iso ) : L"", MAX_PATH );
+		copy_wide ( disk_name, file->disk [ 0 ] ? leaf ( file->disk ) : L"", MAX_PATH );
+
+	}
+
+	static void release_keys ( ) {
+
+		for ( int32_t extended = 0; extended < 2; extended++ ) {
+
+			for ( int32_t scan = 0; scan < 128; scan++ ) {
+
+				if ( !held [ extended ] [ scan ] )
+					continue;
+
+				held [ extended ] [ scan ] = false;
+
+				if ( running )
+					machine->key ( static_cast < uint8_t > ( scan | 0x80 ), extended != 0 );
+
+			}
+
+		}
+
+		if ( buttons && running )
+			machine->mouse ( 0, 0, 0, 0 );
+
+		buttons = 0;
+
+	}
+
+	static void set_capture ( bool value );
+
+	static void save_preview ( ) {
+
+		wchar_t folder [ MAX_PATH ];
+
+		if ( smoke || !frame_width || !vm::folder_of ( file_path, folder ) )
+			return;
+
+		int32_t width = frame_width;
+		int32_t height = frame_height;
+		int32_t step = 1;
+
+		while ( width / step > 1024 || height / step > 512 )
+			step++;
+
+		width /= step;
+		height /= step;
+
+		uint32_t* shrunk = static_cast < uint32_t* > ( runtime_allocate ( sizeof ( uint32_t ) * static_cast < size_t > ( width ) * height ) );
+
+		for ( int32_t y = 0; y < height; y++ ) {
+
+			for ( int32_t x = 0; x < width; x++ )
+				shrunk [ y * width + x ] = frame [ ( y * step ) * frame_width + x * step ];
+
+		}
+
+		vm::write_preview ( folder, shrunk, width, height );
+		runtime_release ( shrunk );
+
+	}
+
+	static void power_on ( ) {
+
+		pc::computer_options options;
+
+		options.processors = file->processors;
+		options.memory = static_cast < uint64_t > ( file->memory_mb ) << 20;
+		options.cap = file->cap;
+		options.optical_first = !file->disk_first;
+		copy_wide ( options.iso, file->iso, MAX_PATH );
+		copy_wide ( options.disk, file->disk, MAX_PATH );
+
+		wchar_t folder [ MAX_PATH ];
+		char error [ 160 ] = { };
+		bool helped = true;
+
+		if ( base::same_text ( file->os, "windows11" ) && vm::folder_of ( file_path, folder ) )
+			helped = pc::make_setup_helper ( folder, options.helper, error, sizeof ( error ) );
+
+		failed = false;
+		problem [ 0 ] = 0;
+		frame_width = 0;
+		frame_height = 0;
+
+		for ( auto& row : held ) {
+
+			for ( bool& key : row )
+				key = false;
+
+		}
+
+		running = machine->power_on ( options );
+
+		if ( !running ) {
+
+			failed = true;
+			MultiByteToWideChar ( CP_UTF8, 0, machine->problem, -1, problem, 255 );
+
+		} else if ( file->iso [ 0 ] && !machine->disc.present ( ) )
+			toast ( L"The disc image couldn't be opened, so the drive starts empty" );
+		else if ( !helped )
+			toast ( L"Couldn't make the Windows 11 setup helper disc, so Setup may ask for TPM 2.0" );
+
+		refresh_names ( );
+		SetTimer ( window, frame_timer, 16, nullptr );
+		render ( );
+
+	}
+
+	static void power_off ( bool keep_screen ) {
+
+		set_capture ( false );
+
+		if ( keep_screen )
+			save_preview ( );
+
+		machine->power_off ( );
+		running = false;
+		render ( );
+
+	}
+
+	static void restart ( ) {
+
+		set_capture ( false );
+		release_keys ( );
+
+		if ( !machine->restart ( ) ) {
+
+			running = false;
+			failed = true;
+			MultiByteToWideChar ( CP_UTF8, 0, machine->problem, -1, problem, 255 );
+
+		}
+
+		render ( );
+
+	}
+
+	static void send_key ( UINT key, uint32_t scan, bool extended, bool down ) {
+
+		if ( !running )
+			return;
+
+		if ( key == VK_PAUSE || key == VK_CANCEL )
+			return;
+
+		if ( key == VK_NUMLOCK ) {
+
+			scan = 0x45;
+			extended = false;
+
+		} else if ( key == VK_SNAPSHOT ) {
+
+			scan = 0x37;
+			extended = true;
+
+		} else if ( key == VK_RSHIFT )
+			extended = false;
+
+		if ( !scan || scan > 0x7F )
+			return;
+
+		if ( !down && !held [ extended ] [ scan ] )
+			return;
+
+		held [ extended ] [ scan ] = down;
+		machine->key ( static_cast < uint8_t > ( down ? scan : scan | 0x80 ), extended );
+
+	}
+
+	static void control_alt_delete ( ) {
+
+		if ( !running )
+			return;
+
+		machine->key ( 0x1D, false );
+		machine->key ( 0x38, false );
+		machine->key ( 0x53, true );
+		Sleep ( 30 );
+		machine->key ( 0xD3, true );
+		machine->key ( 0xB8, false );
+		machine->key ( 0x9D, false );
+
+	}
+
+	static void toggle_fullscreen ( ) {
+
+		LONG_PTR style = GetWindowLongPtrW ( window, GWL_STYLE );
+
+		if ( !fullscreen ) {
+
+			MONITORINFO monitor = { sizeof ( MONITORINFO ) };
+
+			GetWindowPlacement ( window, &saved_place );
+			GetMonitorInfoW ( MonitorFromWindow ( window, MONITOR_DEFAULTTONEAREST ), &monitor );
+			SetWindowLongPtrW ( window, GWL_STYLE, ( style & ~WS_OVERLAPPEDWINDOW ) | WS_POPUP );
+			SetWindowPos ( window, HWND_TOP, monitor.rcMonitor.left, monitor.rcMonitor.top, monitor.rcMonitor.right - monitor.rcMonitor.left, monitor.rcMonitor.bottom - monitor.rcMonitor.top, SWP_FRAMECHANGED | SWP_NOOWNERZORDER );
+			fullscreen = true;
+			toast ( L"Right Ctrl+F leaves fullscreen" );
+
+		} else {
+
+			SetWindowLongPtrW ( window, GWL_STYLE, ( style & ~WS_POPUP ) | WS_OVERLAPPEDWINDOW );
+			SetWindowPlacement ( window, &saved_place );
+			SetWindowPos ( window, nullptr, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER );
+			fullscreen = false;
+			render ( );
+
+		}
+
+	}
+
+	static void take_screenshot ( ) {
+
+		wchar_t path [ MAX_PATH ];
+
+		if ( !running || !frame_width ) {
+
+			toast ( L"Start the machine first to take a screenshot" );
+
+			return;
+
+		}
+
+		if ( screenshot_path ( path ) && png::save ( path, frame, frame_width, frame_height ) )
+			toast ( L"Screenshot saved to Pictures\\Coldboot" );
+		else
+			toast ( L"Couldn't save the screenshot" );
+
+	}
+
+	static bool host_key ( WPARAM key, bool extended, bool down ) {
+
+		if ( key == VK_CONTROL && extended ) {
+
+			if ( down ) {
+
+				if ( !host_down ) {
+
+					host_down = true;
+					host_used = false;
+
+				}
+
+			} else {
+
+				if ( host_down && !host_used && captured )
+					set_capture ( false );
+
+				host_down = false;
+
+			}
+
+			return true;
+
+		}
+
+		if ( !host_down )
+			return false;
+
+		if ( down ) {
+
+			host_used = true;
+
+			if ( key == 'F' )
+				PostMessageW ( window, WM_APP + 1, 0, 0 );
+			else if ( key == VK_DELETE )
+				PostMessageW ( window, WM_APP + 2, 0, 0 );
+			else if ( key == 'S' )
+				PostMessageW ( window, WM_APP + 3, 0, 0 );
+
+		}
+
+		return true;
+
+	}
+
+	static LRESULT __stdcall keyboard_filter ( int code, WPARAM message, LPARAM data ) {
+
+		if ( code == HC_ACTION && captured && GetForegroundWindow ( ) == window ) {
+
+			const KBDLLHOOKSTRUCT* info = reinterpret_cast < const KBDLLHOOKSTRUCT* > ( data );
+			bool down = !( info->flags & LLKHF_UP );
+			bool extended = ( info->flags & LLKHF_EXTENDED ) != 0;
+			WPARAM key = info->vkCode;
+
+			if ( key == VK_LCONTROL || key == VK_RCONTROL )
+				key = VK_CONTROL;
+
+			if ( !host_key ( key, extended, down ) )
+				send_key ( static_cast < UINT > ( info->vkCode ), info->scanCode & 0xFF, extended, down );
+
+			return 1;
+
+		}
+
+		return CallNextHookEx ( keyboard_hook, code, message, data );
+
+	}
+
+	static void set_capture ( bool value ) {
+
+		value = value && running;
+
+		if ( value == captured )
+			return;
+
+		captured = value;
+
+		RAWINPUTDEVICE device = { 0x01, 0x02, 0, nullptr };
+
+		if ( captured ) {
+
+			RECT area;
+			POINT corner = { 0, 0 };
+			float factor = scale ( );
+
+			area.left = static_cast < LONG > ( frontend->frame_area.x * factor );
+			area.top = static_cast < LONG > ( frontend->frame_area.y * factor );
+			area.right = static_cast < LONG > ( frontend->frame_area.right ( ) * factor );
+			area.bottom = static_cast < LONG > ( frontend->frame_area.bottom ( ) * factor );
+			ClientToScreen ( window, &corner );
+			OffsetRect ( &area, corner.x, corner.y );
+			ClipCursor ( &area );
+			ShowCursor ( FALSE );
+			device.dwFlags = 0;
+			device.hwndTarget = window;
+			RegisterRawInputDevices ( &device, 1, sizeof ( device ) );
+
+			if ( !keyboard_hook )
+				keyboard_hook = SetWindowsHookExW ( WH_KEYBOARD_LL, &keyboard_filter, GetModuleHandleW ( nullptr ), 0 );
+
+		} else {
+
+			ClipCursor ( nullptr );
+			ShowCursor ( TRUE );
+			device.dwFlags = RIDEV_REMOVE;
+			RegisterRawInputDevices ( &device, 1, sizeof ( device ) );
+
+			if ( keyboard_hook ) {
+
+				UnhookWindowsHookEx ( keyboard_hook );
+				keyboard_hook = nullptr;
+
+			}
+
+			release_keys ( );
+
+		}
+
+		render ( );
+
+	}
+
+	static void raw_mouse ( LPARAM handle ) {
+
+		RAWINPUT input;
+		UINT size = sizeof ( input );
+
+		if ( GetRawInputData ( reinterpret_cast < HRAWINPUT > ( handle ), RID_INPUT, &input, &size, sizeof ( RAWINPUTHEADER ) ) == static_cast < UINT > ( -1 ) || input.header.dwType != RIM_TYPEMOUSE )
+			return;
+
+		const RAWMOUSE& mouse = input.data.mouse;
+		USHORT flags = mouse.usButtonFlags;
+		int32_t wheel = 0;
+
+		if ( flags & RI_MOUSE_LEFT_BUTTON_DOWN )
+			buttons |= 1;
+
+		if ( flags & RI_MOUSE_LEFT_BUTTON_UP )
+			buttons &= static_cast < uint8_t > ( ~1 );
+
+		if ( flags & RI_MOUSE_RIGHT_BUTTON_DOWN )
+			buttons |= 2;
+
+		if ( flags & RI_MOUSE_RIGHT_BUTTON_UP )
+			buttons &= static_cast < uint8_t > ( ~2 );
+
+		if ( flags & RI_MOUSE_MIDDLE_BUTTON_DOWN )
+			buttons |= 4;
+
+		if ( flags & RI_MOUSE_MIDDLE_BUTTON_UP )
+			buttons &= static_cast < uint8_t > ( ~4 );
+
+		if ( flags & RI_MOUSE_WHEEL )
+			wheel = -static_cast < SHORT > ( mouse.usButtonData ) / WHEEL_DELTA;
+
+		int32_t dx = 0;
+		int32_t dy = 0;
+
+		if ( !( mouse.usFlags & MOUSE_MOVE_ABSOLUTE ) ) {
+
+			dx = mouse.lLastX;
+			dy = mouse.lLastY;
+
+		}
+
+		if ( running )
+			machine->mouse ( dx, dy, wheel, buttons );
+
+	}
+
+	static void insert_disc ( ) {
+
+		wchar_t path [ MAX_PATH ];
+
+		set_capture ( false );
+
+		if ( !open_file ( window, FILE_IMAGE, path ) )
+			return;
+
+		copy_wide ( file->iso, path, MAX_PATH );
+
+		if ( running && !machine->change_disc ( path ) ) {
+
+			toast ( L"That file couldn't be opened as a disc image" );
+			file->iso [ 0 ] = 0;
+
+		} else {
+
+			base::writer text;
+
+			text.add ( L"Inserted " ).add ( leaf ( path ) );
+			toast ( text.text ( ) );
+
+		}
+
+		save_machine ( );
+		refresh_names ( );
+		render ( );
+
+	}
+
+	static void eject_disc ( ) {
+
+		if ( running )
+			machine->change_disc ( nullptr );
+
+		file->iso [ 0 ] = 0;
+		save_machine ( );
+		refresh_names ( );
+		toast ( L"Disc ejected" );
+
+	}
+
+	static void act ( ui::console_action action ) {
+
+		switch ( action ) {
+
+			case ui::TOOL_START:
+				power_on ( );
+				return;
+
+			case ui::TOOL_SHUT_DOWN:
+
+				if ( running ) {
+
+					machine->press_power ( );
+					toast ( L"Pressed the power button. Use Turn off if the guest ignores it." );
+
+				}
+
+				return;
+
+			case ui::TOOL_TURN_OFF:
+				power_off ( true );
+				return;
+
+			case ui::TOOL_RESET:
+				restart ( );
+				toast ( L"Reset" );
+				return;
+
+			case ui::TOOL_KEYS:
+				control_alt_delete ( );
+				return;
+
+			case ui::TOOL_DISC:
+				insert_disc ( );
+				return;
+
+			case ui::TOOL_EJECT:
+				eject_disc ( );
+				return;
+
+			case ui::TOOL_SHOT:
+				take_screenshot ( );
+				return;
+
+			case ui::TOOL_FULLSCREEN:
+				toggle_fullscreen ( );
+				return;
+
+			case ui::TOOL_SCREEN:
+
+				if ( running && !captured ) {
+
+					set_capture ( true );
+					toast ( L"Mouse and keyboard captured. Right Ctrl releases them." );
+
+				}
+
+				return;
+
+			default:
+				return;
+
+		}
+
+	}
+
+	static void tick ( ) {
+
+		if ( !running ) {
+
+			KillTimer ( window, frame_timer );
+
+			return;
+
+		}
+
+		switch ( machine->poll ( ) ) {
+
+			case pc::EVENT_RESET:
+				restart ( );
+				return;
+
+			case pc::EVENT_OFF:
+				power_off ( true );
+				toast ( L"The machine shut down" );
+				return;
+
+			case pc::EVENT_FAILED:
+				set_capture ( false );
+				save_preview ( );
+				MultiByteToWideChar ( CP_UTF8, 0, machine->problem, -1, problem, 255 );
+				machine->power_off ( );
+				running = false;
+				failed = true;
+				render ( );
+				return;
+
+			default:
+				render ( );
+				return;
+
+		}
+
+	}
+
+	static void smoke_tick ( ) {
+
+		double elapsed = now_seconds ( ) - smoke_started;
+
+		if ( smoke_step == 0 && elapsed >= 8.0 ) {
+
+			base::writer path;
+			base::writer report;
+			char bytes [ 512 ];
+
+			path.add ( smoke_folder ).add ( L"\\pc_console.png" );
+			render ( );
+			display->save ( path.text ( ) );
+			report.add ( L"running " ).add ( running ? L"yes" : L"no" ).add ( L"\r\nscreen " ).number ( frame_width ).add ( L"x" ).number ( frame_height ).add ( L"\r\ndisc " ).add ( disc_name [ 0 ] ? disc_name : L"-" ).add ( L"\r\n" );
+
+			int32_t length = WideCharToMultiByte ( CP_UTF8, 0, report.text ( ), report.size ( ), bytes, sizeof ( bytes ), nullptr, nullptr );
+
+			path.clear ( );
+			path.add ( smoke_folder ).add ( L"\\pc_console.txt" );
+			files::write ( path.text ( ), bytes, length );
+			smoke_step = 1;
+
+		} else if ( smoke_step == 1 )
+			DestroyWindow ( window );
+
+	}
+
+	static LRESULT __stdcall procedure ( HWND handle, UINT message, WPARAM wide, LPARAM extra ) {
+
+		switch ( message ) {
+
+			case WM_ERASEBKGND:
+				return 1;
+
+			case WM_PAINT:
+				ValidateRect ( handle, nullptr );
+				render ( );
+				return 0;
+
+			case WM_SIZE:
+				render ( );
+
+				if ( captured )
+					set_capture ( false );
+
+				return 0;
+
+			case WM_DPICHANGED: {
+
+				const RECT* suggested = reinterpret_cast < const RECT* > ( extra );
+
+				SetWindowPos ( handle, nullptr, suggested->left, suggested->top, suggested->right - suggested->left, suggested->bottom - suggested->top, SWP_NOZORDER | SWP_NOACTIVATE );
+				render ( );
+
+				return 0;
+
+			}
+
+			case WM_GETMINMAXINFO: {
+
+				MINMAXINFO* limits = reinterpret_cast < MINMAXINFO* > ( extra );
+				float factor = static_cast < float > ( GetDpiForWindow ( handle ) ) / 96.0f;
+
+				limits->ptMinTrackSize.x = static_cast < LONG > ( 760.0f * factor );
+				limits->ptMinTrackSize.y = static_cast < LONG > ( 520.0f * factor );
+
+				return 0;
+
+			}
+
+			case WM_TIMER:
+
+				if ( wide == smoke_timer )
+					smoke_tick ( );
+				else
+					tick ( );
+
+				return 0;
+
+			case WM_APP + 1:
+				toggle_fullscreen ( );
+				return 0;
+
+			case WM_APP + 2:
+				control_alt_delete ( );
+				return 0;
+
+			case WM_APP + 3:
+				take_screenshot ( );
+				return 0;
+
+			case WM_INPUT:
+
+				if ( captured )
+					raw_mouse ( extra );
+
+				return DefWindowProcW ( handle, message, wide, extra );
+
+			case WM_MOUSEMOVE: {
+
+				float factor = scale ( );
+
+				if ( !captured ) {
+
+					TRACKMOUSEEVENT track = { sizeof ( TRACKMOUSEEVENT ), TME_LEAVE, handle, 0 };
+
+					TrackMouseEvent ( &track );
+					frontend->mouse_move ( static_cast < float > ( static_cast < int16_t > ( LOWORD ( extra ) ) ) / factor, static_cast < float > ( static_cast < int16_t > ( HIWORD ( extra ) ) ) / factor );
+
+					if ( !running )
+						render ( );
+
+				}
+
+				return 0;
+
+			}
+
+			case WM_MOUSELEAVE:
+				frontend->mouse_leave ( );
+				render ( );
+				return 0;
+
+			case WM_LBUTTONDOWN:
+
+				if ( !captured ) {
+
+					float factor = scale ( );
+
+					SetCapture ( handle );
+					frontend->mouse_down ( static_cast < float > ( static_cast < int16_t > ( LOWORD ( extra ) ) ) / factor, static_cast < float > ( static_cast < int16_t > ( HIWORD ( extra ) ) ) / factor );
+					render ( );
+
+				}
+
+				return 0;
+
+			case WM_LBUTTONUP:
+
+				if ( !captured ) {
+
+					float factor = scale ( );
+
+					ReleaseCapture ( );
+
+					ui::console_action action = frontend->mouse_up ( static_cast < float > ( static_cast < int16_t > ( LOWORD ( extra ) ) ) / factor, static_cast < float > ( static_cast < int16_t > ( HIWORD ( extra ) ) ) / factor );
+
+					render ( );
+					act ( action );
+
+				}
+
+				return 0;
+
+			case WM_KEYDOWN:
+			case WM_SYSKEYDOWN:
+			case WM_KEYUP:
+			case WM_SYSKEYUP: {
+
+				bool down = message == WM_KEYDOWN || message == WM_SYSKEYDOWN;
+				bool extended = ( extra >> 24 & 1 ) != 0;
+				uint32_t scan = static_cast < uint32_t > ( extra >> 16 ) & 0xFF;
+
+				if ( message == WM_SYSKEYDOWN && wide == VK_F4 && !captured )
+					break;
+
+				if ( host_key ( wide, extended, down ) )
+					return 0;
+
+				send_key ( static_cast < UINT > ( wide ), scan, extended, down );
+
+				return 0;
+
+			}
+
+			case WM_SYSCHAR:
+			case WM_CHAR:
+				return 0;
+
+			case WM_SETTINGCHANGE:
+
+				if ( extra && base::same_text ( reinterpret_cast < const wchar_t* > ( extra ), L"ImmersiveColorSet" ) ) {
+
+					apply_theme ( );
+					render ( );
+
+				}
+
+				break;
+
+			case WM_ACTIVATE:
+
+				if ( LOWORD ( wide ) == WA_INACTIVE ) {
+
+					set_capture ( false );
+					release_keys ( );
+					host_down = false;
+
+				}
+
+				break;
+
+			case WM_CLOSE:
+				DestroyWindow ( handle );
+				return 0;
+
+			case WM_DESTROY: {
+
+				WINDOWPLACEMENT place = { sizeof ( WINDOWPLACEMENT ) };
+
+				if ( fullscreen )
+					place = saved_place;
+				else
+					GetWindowPlacement ( handle, &place );
+
+				set_capture ( false );
+
+				if ( running )
+					save_preview ( );
+
+				machine->power_off ( );
+				running = false;
+				file->window_x = place.rcNormalPosition.left;
+				file->window_y = place.rcNormalPosition.top;
+				file->window_width = place.rcNormalPosition.right - place.rcNormalPosition.left;
+				file->window_height = place.rcNormalPosition.bottom - place.rcNormalPosition.top;
+				file->maximized = place.showCmd == SW_SHOWMAXIMIZED;
+				save_machine ( );
+				RemovePropW ( handle, vm::window_tag );
+				files::settle ( );
+				PostQuitMessage ( 0 );
+
+				return 0;
+
+			}
+
+			default:
+				break;
+
+		}
+
+		return DefWindowProcW ( handle, message, wide, extra );
+
+	}
+
+	int computer_main ( const wchar_t* path, vm::config& machine_file, const settings& theme, const wchar_t* smoke_path ) {
+
+		QueryPerformanceFrequency ( &frequency );
+		file = &machine_file;
+		file_path = path;
+		global = &theme;
+		smoke = smoke_path != nullptr;
+
+		if ( smoke )
+			copy_wide ( smoke_folder, smoke_path, MAX_PATH );
+
+		HINSTANCE instance = GetModuleHandleW ( nullptr );
+		WNDCLASSEXW type = { };
+
+		type.cbSize = sizeof ( type );
+		type.lpfnWndProc = &procedure;
+		type.hInstance = instance;
+		type.hCursor = LoadCursorW ( nullptr, IDC_ARROW );
+		type.hIcon = LoadIconW ( instance, MAKEINTRESOURCEW ( 1 ) );
+		type.lpszClassName = L"coldboot_pc";
+		RegisterClassExW ( &type );
+
+		machine = new pc::computer ( );
+		frontend = new ui::console ( );
+		display = new render::gpu ( );
+		frame = static_cast < uint32_t* > ( runtime_allocate_zero ( sizeof ( uint32_t ) * pc::vga::max_width * pc::vga::max_height ) );
+
+		base::writer title;
+
+		title.add ( machine_file.name ).add ( L" - Coldboot" );
+		window = CreateWindowExW ( 0, L"coldboot_pc", title.text ( ), WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 1100, 860, nullptr, nullptr, instance, nullptr );
+
+		if ( !window )
+			return 1;
+
+		SetPropW ( window, vm::window_tag, reinterpret_cast < HANDLE > ( vm::running_hash ( path ) ) );
+
+		float factor = scale ( );
+		RECT bounds = { 0, 0, static_cast < LONG > ( 1060.0f * factor ), static_cast < LONG > ( 860.0f * factor ) };
+
+		AdjustWindowRectExForDpi ( &bounds, WS_OVERLAPPEDWINDOW, FALSE, 0, GetDpiForWindow ( window ) );
+
+		RECT wanted = { machine_file.window_x, machine_file.window_y, machine_file.window_x + machine_file.window_width, machine_file.window_y + machine_file.window_height };
+
+		if ( !smoke && machine_file.window_width > 200 && machine_file.window_height > 200 && MonitorFromRect ( &wanted, MONITOR_DEFAULTTONULL ) )
+			SetWindowPos ( window, nullptr, wanted.left, wanted.top, machine_file.window_width, machine_file.window_height, SWP_NOZORDER | SWP_NOACTIVATE );
+		else
+			SetWindowPos ( window, nullptr, 0, 0, bounds.right - bounds.left, bounds.bottom - bounds.top, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE );
+
+		apply_theme ( );
+
+		RECT client;
+
+		GetClientRect ( window, &client );
+
+		if ( !display->create ( window, client.right, client.bottom ) ) {
+
+			MessageBoxW ( window, L"Coldboot needs Direct3D 11 and couldn't start it on this PC.", L"Coldboot", MB_ICONERROR );
+
+			return 1;
+
+		}
+
+		display->set_dpi ( 96.0f * factor );
+
+		if ( smoke ) {
+
+			smoke_started = now_seconds ( );
+			SetTimer ( window, smoke_timer, 100, nullptr );
+
+		} else
+			ShowWindow ( window, machine_file.maximized ? SW_SHOWMAXIMIZED : SW_SHOW );
+
+		power_on ( );
+
+		MSG message;
+
+		while ( GetMessageW ( &message, nullptr, 0, 0 ) > 0 ) {
+
+			TranslateMessage ( &message );
+			DispatchMessageW ( &message );
+
+		}
+
+		delete machine;
+		delete display;
+		delete frontend;
+		runtime_release ( frame );
+		machine = nullptr;
+
+		return 0;
+
+	}
+
+}

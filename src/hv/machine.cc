@@ -141,6 +141,23 @@ namespace hv {
 
 	}
 
+	void machine::relocate_ports ( device* target, uint16_t from, uint16_t first, uint16_t last ) {
+
+		for ( port_range& range : port_ranges ) {
+
+			if ( range.target == target && range.first == from ) {
+
+				range.last = last;
+				range.first = first;
+
+				return;
+
+			}
+
+		}
+
+	}
+
 	bool machine::get_state ( uint32_t processor, cpu_state& out ) const {
 
 		WHV_REGISTER_VALUE values [ state_count ] = { };
@@ -228,6 +245,23 @@ namespace hv {
 
 	bool machine::virtual_wire ( uint32_t processor ) {
 
+		uint32_t* page = static_cast < uint32_t* > ( runtime_allocate_zero ( 4096 ) );
+		bool wired = core.apic_page ( processor, page );
+
+		if ( wired ) {
+
+			page [ 0xF0 / 4 ] = 0x1FF;
+			page [ 0x350 / 4 ] = 0x700;
+			page [ 0x360 / 4 ] = 0x400;
+			wired = core.set_apic_page ( processor, page );
+
+		}
+
+		runtime_release ( page );
+
+		if ( wired )
+			return true;
+
 		WHV_REGISTER_NAME names [ 3 ] = { WHvX64RegisterApicSpurious, WHvX64RegisterApicLvtLint0, WHvX64RegisterApicLvtLint1 };
 		WHV_REGISTER_VALUE values [ 3 ] = { };
 
@@ -260,8 +294,12 @@ namespace hv {
 		reason = STOP_NONE;
 		SetEvent ( resume_event );
 
-		for ( uint32_t i = 0; i < max_processors; i++ )
+		for ( uint32_t i = 0; i < max_processors; i++ ) {
+
 			pending [ i ] = 0;
+			window_seen [ i ] = false;
+
+		}
 
 		for ( uint32_t i = 0; i < core.processors; i++ ) {
 
@@ -436,10 +474,10 @@ namespace hv {
 
 	void machine::read ( uint64_t address, uint8_t* out, uint32_t size ) {
 
-		if ( address < core.memory_size && size <= core.memory_size - address ) {
+		if ( const uint8_t* direct = core.host ( address, size ) ) {
 
 			for ( uint32_t i = 0; i < size; i++ )
-				out [ i ] = core.memory [ address + i ];
+				out [ i ] = direct [ i ];
 
 			return;
 
@@ -463,10 +501,10 @@ namespace hv {
 
 	void machine::write ( uint64_t address, const uint8_t* data, uint32_t size ) {
 
-		if ( address < core.memory_size && size <= core.memory_size - address ) {
+		if ( uint8_t* direct = core.host ( address, size ) ) {
 
 			for ( uint32_t i = 0; i < size; i++ )
-				core.memory [ address + i ] = data [ i ];
+				direct [ i ] = data [ i ];
 
 			return;
 
@@ -634,6 +672,7 @@ namespace hv {
 				const WHV_X64_MSR_ACCESS_CONTEXT& access = exit.MsrAccess;
 
 				InterlockedIncrement ( &msr_exits );
+				last_msr = access.MsrNumber;
 
 				if ( access.AccessInfo.IsWrite ) {
 
@@ -675,10 +714,14 @@ namespace hv {
 				return true;
 
 			case WHvRunVpExitReasonX64InterruptWindow:
+				window_seen [ index ] = true;
 				return true;
 
 			case WHvRunVpExitReasonX64Halt:
-				WaitForSingleObject ( threads [ index ].wake, 10 );
+
+				if ( !pending [ index ] && !( index == 0 && legacy_wanted ) )
+					WaitForSingleObject ( threads [ index ].wake, 10 );
+
 				return true;
 
 			case WHvRunVpExitReasonCanceled:
@@ -791,7 +834,9 @@ namespace hv {
 		if ( !core.registers ( index, names, 4, values ) )
 			return fail ( index, "couldn't read the interrupt state", nullptr, 0 );
 
-		bool open = ( values [ 1 ].Reg64 & 0x200 ) && !values [ 2 ].InterruptState.InterruptShadow;
+		bool open = window_seen [ index ] || ( ( values [ 1 ].Reg64 & 0x200 ) && !values [ 2 ].InterruptState.InterruptShadow );
+
+		window_seen [ index ] = false;
 
 		if ( values [ 0 ].ExtIntEvent.EventPending || !open ) {
 
@@ -826,6 +871,7 @@ namespace hv {
 		WHV_REGISTER_NAME updates [ 2 ] = { WHvRegisterPendingEvent, WHvRegisterInternalActivityState };
 		WHV_REGISTER_VALUE changes [ 2 ] = { };
 
+		InterlockedIncrement ( &injected );
 		changes [ 0 ].ExtIntEvent.EventPending = 1;
 		changes [ 0 ].ExtIntEvent.EventType = WHvX64PendingEventExtInt;
 		changes [ 0 ].ExtIntEvent.Vector = static_cast < uint64_t > ( vector & 0xFF );
@@ -869,7 +915,8 @@ namespace hv {
 				return true;
 
 			default:
-				return false;
+				value = 0;
+				return lenient_msrs;
 
 		}
 
@@ -887,7 +934,16 @@ namespace hv {
 
 		}
 
-		return msr == 0x0000008B || msr == 0x0000017A || msr == 0x000001A0;
+		return msr == 0x0000008B || msr == 0x0000017A || msr == 0x000001A0 || lenient_msrs;
+
+	}
+
+	void machine::set_mtrr ( uint32_t msr, uint64_t value ) {
+
+		int32_t slot = mtrr_slot ( msr );
+
+		for ( uint32_t i = 0; slot >= 0 && i < max_processors; i++ )
+			mtrrs [ i ] [ slot ] = value;
 
 	}
 

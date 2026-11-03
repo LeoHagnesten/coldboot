@@ -37,6 +37,13 @@ namespace hv {
 			&& bind ( module, "WHvSetVirtualProcessorRegisters", table.set_registers )
 			&& bind ( module, "WHvRequestInterrupt", table.request_interrupt );
 
+		if ( bound ) {
+
+			bind ( module, "WHvGetVirtualProcessorInterruptControllerState2", table.get_apic );
+			bind ( module, "WHvSetVirtualProcessorInterruptControllerState2", table.set_apic );
+
+		}
+
 		state = bound ? 1 : -1;
 
 		return bound ? &table : nullptr;
@@ -157,17 +164,29 @@ namespace hv {
 			return fail ( "Couldn't set up the partition", result );
 
 		memory_size = ( memory_bytes + 0xFFFF ) & ~static_cast < uint64_t > ( 0xFFFF );
+		low_size = memory_size < hole_start ? memory_size : hole_start;
 		memory = static_cast < uint8_t* > ( VirtualAlloc ( nullptr, memory_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE ) );
 
 		if ( !memory )
 			return fail ( "Couldn't allocate guest memory", HRESULT_FROM_WIN32 ( GetLastError ( ) ) );
 
-		result = api->map_range ( handle, memory, 0, memory_size, static_cast < WHV_MAP_GPA_RANGE_FLAGS > ( WHvMapGpaRangeFlagRead | WHvMapGpaRangeFlagWrite | WHvMapGpaRangeFlagExecute ) );
+		WHV_MAP_GPA_RANGE_FLAGS everything = static_cast < WHV_MAP_GPA_RANGE_FLAGS > ( WHvMapGpaRangeFlagRead | WHvMapGpaRangeFlagWrite | WHvMapGpaRangeFlagExecute );
+
+		result = api->map_range ( handle, memory, 0, low_size, everything );
 
 		if ( FAILED ( result ) )
 			return fail ( "Couldn't map guest memory", result );
 
 		mapped = true;
+
+		if ( memory_size > low_size ) {
+
+			result = api->map_range ( handle, memory + low_size, high_start, memory_size - low_size, everything );
+
+			if ( FAILED ( result ) )
+				return fail ( "Couldn't map guest memory above 4 GB", result );
+
+		}
 
 		for ( uint32_t i = 0; i < processor_count; i++ ) {
 
@@ -195,8 +214,21 @@ namespace hv {
 			for ( uint32_t i = created; i > 0; i-- )
 				api->delete_processor ( handle, i - 1 );
 
-			if ( mapped )
-				api->unmap_range ( handle, 0, memory_size );
+			for ( window& slot : windows ) {
+
+				if ( slot.size )
+					api->unmap_range ( handle, slot.address, slot.size );
+
+			}
+
+			if ( mapped ) {
+
+				api->unmap_range ( handle, 0, low_size );
+
+				if ( memory_size > low_size )
+					api->unmap_range ( handle, high_start, memory_size - low_size );
+
+			}
 
 			api->delete_partition ( handle );
 
@@ -205,12 +237,129 @@ namespace hv {
 		if ( memory )
 			VirtualFree ( memory, 0, MEM_RELEASE );
 
+		for ( window& slot : windows )
+			slot = { };
+
+		trapped_address = 0;
+		trapped_size = 0;
 		handle = nullptr;
 		memory = nullptr;
 		memory_size = 0;
+		low_size = 0;
 		processors = 0;
 		created = 0;
 		mapped = false;
+
+	}
+
+	bool partition::map_window ( uint8_t* host_memory, uint64_t address, uint64_t size ) {
+
+		if ( !handle || !size )
+			return false;
+
+		AcquireSRWLockExclusive ( &window_lock );
+
+		window* free_slot = nullptr;
+
+		for ( window& slot : windows ) {
+
+			if ( !slot.size && !free_slot )
+				free_slot = &slot;
+
+		}
+
+		bool done = free_slot && SUCCEEDED ( platform ( )->map_range ( handle, host_memory, address, size, static_cast < WHV_MAP_GPA_RANGE_FLAGS > ( WHvMapGpaRangeFlagRead | WHvMapGpaRangeFlagWrite | WHvMapGpaRangeFlagExecute ) ) );
+
+		if ( done )
+			*free_slot = { host_memory, address, size };
+
+		ReleaseSRWLockExclusive ( &window_lock );
+
+		return done;
+
+	}
+
+	void partition::unmap_window ( uint64_t address ) {
+
+		AcquireSRWLockExclusive ( &window_lock );
+
+		for ( window& slot : windows ) {
+
+			if ( slot.size && slot.address == address ) {
+
+				if ( handle )
+					platform ( )->unmap_range ( handle, slot.address, slot.size );
+
+				slot = { };
+
+			}
+
+		}
+
+		ReleaseSRWLockExclusive ( &window_lock );
+
+	}
+
+	bool partition::set_cap ( uint32_t percent ) {
+
+		if ( !handle || !percent || percent > 100 )
+			return false;
+
+		WHV_PARTITION_PROPERTY property = { };
+
+		property.CpuCap = percent * 1000;
+
+		return SUCCEEDED ( platform ( )->set_property ( handle, WHvPartitionPropertyCodeCpuCap, &property, sizeof ( property ) ) );
+
+	}
+
+	bool partition::trap ( uint64_t address, uint64_t size ) {
+
+		if ( trapped_size )
+			return trapped_address == address && trapped_size == size;
+
+		if ( !handle || address + size > low_size || FAILED ( platform ( )->unmap_range ( handle, address, size ) ) )
+			return false;
+
+		trapped_address = address;
+		trapped_size = size;
+
+		return true;
+
+	}
+
+	void partition::untrap ( ) {
+
+		if ( !trapped_size )
+			return;
+
+		if ( handle )
+			platform ( )->map_range ( handle, memory + trapped_address, trapped_address, trapped_size, static_cast < WHV_MAP_GPA_RANGE_FLAGS > ( WHvMapGpaRangeFlagRead | WHvMapGpaRangeFlagWrite | WHvMapGpaRangeFlagExecute ) );
+
+		trapped_size = 0;
+		trapped_address = 0;
+
+	}
+
+	uint8_t* partition::host ( uint64_t address, uint64_t size ) const {
+
+		if ( trapped_size && address < trapped_address + trapped_size && address + size > trapped_address )
+			return nullptr;
+
+		if ( address < low_size && size <= low_size - address )
+			return memory + address;
+
+		if ( address >= high_start && address - high_start < memory_size - low_size && size <= memory_size - low_size - ( address - high_start ) )
+			return memory + low_size + ( address - high_start );
+
+		for ( const window& slot : windows ) {
+
+			if ( slot.size && address >= slot.address && address - slot.address < slot.size && size <= slot.size - ( address - slot.address ) )
+				return slot.host + ( address - slot.address );
+
+		}
+
+		return nullptr;
 
 	}
 
@@ -229,6 +378,23 @@ namespace hv {
 	bool partition::run ( uint32_t processor, WHV_RUN_VP_EXIT_CONTEXT& exit ) {
 
 		return handle && processor < processors && SUCCEEDED ( platform ( )->run_processor ( handle, processor, &exit, sizeof ( exit ) ) );
+
+	}
+
+	bool partition::apic_page ( uint32_t processor, uint32_t* page ) const {
+
+		const functions* api = platform ( );
+		UINT32 written = 0;
+
+		return handle && api && api->get_apic && processor < processors && SUCCEEDED ( api->get_apic ( handle, processor, page, 4096, &written ) ) && written >= 1024;
+
+	}
+
+	bool partition::set_apic_page ( uint32_t processor, const uint32_t* page ) {
+
+		const functions* api = platform ( );
+
+		return handle && api && api->set_apic && processor < processors && SUCCEEDED ( api->set_apic ( handle, processor, page, 4096 ) );
 
 	}
 

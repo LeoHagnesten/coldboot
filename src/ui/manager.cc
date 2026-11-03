@@ -961,7 +961,7 @@ namespace ui {
 
 		gpu.icon ( render::ICON_MONITOR, x + 16.0f, y + 16.0f, 30.0f, colors.faint );
 		gpu.text ( L"No machines yet", render::FONT_HEADING, rect { x, y + 44.0f, 400.0f, 26.0f }, colors.text, render::ALIGN_LEFT );
-		gpu.text ( L"A machine is an IBM PC/XT with its own floppies, memory and BIOS.", render::FONT_BODY, rect { x, y + 76.0f, 400.0f, 20.0f }, colors.muted, render::ALIGN_LEFT );
+		gpu.text ( L"A machine is a modern PC or an IBM PC/XT with its own disks and memory.", render::FONT_BODY, rect { x, y + 76.0f, 400.0f, 20.0f }, colors.muted, render::ALIGN_LEFT );
 		gpu.text ( L"Each one lives in a folder you can copy or back up.", render::FONT_BODY, rect { x, y + 96.0f, 400.0f, 20.0f }, colors.muted, render::ALIGN_LEFT );
 		button ( gpu, colors, rect { x, y + 132.0f, 150.0f, 32.0f }, L"New machine", ACTION_NEW, 0, true, 0, render::ICON_PLUS );
 		button ( gpu, colors, rect { x + 160.0f, y + 132.0f, 150.0f, 32.0f }, L"Add existing\x2026", ACTION_ADD, 1, true, 0, render::ICON_FOLDER );

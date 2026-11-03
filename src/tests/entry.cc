@@ -31,6 +31,10 @@ bool test_main ( int32_t& result ) {
 			timing = true;
 		else if ( ( base::same_text ( arguments [ i ], L"--bios" ) || base::same_text ( arguments [ i ], L"--own" ) || base::same_text ( arguments [ i ], L"--asm" ) ) && !mode )
 			mode = 3;
+		else if ( base::same_text ( arguments [ i ], L"--pc" ) && !mode )
+			mode = 4;
+		else if ( base::same_text ( arguments [ i ], L"--make-iso" ) && !mode )
+			mode = 5;
 
 	}
 
@@ -47,6 +51,10 @@ bool test_main ( int32_t& result ) {
 
 	if ( mode == 3 )
 		result = tests::capture_main ( arguments, count );
+	else if ( mode == 4 )
+		result = tests::computer_main ( arguments, count );
+	else if ( mode == 5 )
+		result = tests::make_iso_main ( arguments, count );
 	else
 		result = mode == 1 ? tests::foundation_tests ( ) : tests::single_step_suite ( folder, only, exact, timing );
 

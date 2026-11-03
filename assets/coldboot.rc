@@ -9,6 +9,7 @@
 105 RCDATA "disk.asm"
 106 RCDATA "services.asm"
 107 RCDATA "fixed.asm"
+108 RCDATA "modern.asm"
 
 CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "coldboot.manifest"
 

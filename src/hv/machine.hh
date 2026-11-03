@@ -64,6 +64,8 @@ namespace hv {
 
 		void attach_memory ( uint64_t base, uint64_t size, device* target );
 
+		void relocate_ports ( device* target, uint16_t from, uint16_t first, uint16_t last );
+
 		bool get_state ( uint32_t processor, cpu_state& out ) const;
 
 		bool set_state ( uint32_t processor, const cpu_state& in );
@@ -73,6 +75,8 @@ namespace hv {
 		bool park ( uint32_t processor );
 
 		bool virtual_wire ( uint32_t processor );
+
+		void set_mtrr ( uint32_t msr, uint64_t value );
 
 		bool start ( );
 
@@ -135,6 +139,9 @@ namespace hv {
 		partition core;
 		stop_reason reason = STOP_NONE;
 		volatile long msr_exits = 0;
+		volatile long last_msr = 0;
+		volatile long injected = 0;
+		bool lenient_msrs = false;
 		char problem [ 200 ] = { };
 
 	private:
@@ -190,6 +197,7 @@ namespace hv {
 		base::list < memory_range > memory_ranges;
 		processor_thread threads [ max_processors ];
 		volatile long pending [ max_processors ] = { };
+		bool window_seen [ max_processors ] = { };
 		uint64_t mtrrs [ max_processors ] [ 28 ] = { };
 		eoi_listener* eoi_target = nullptr;
 		legacy_source* legacy = nullptr;

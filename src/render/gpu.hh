@@ -139,8 +139,8 @@ namespace render {
 
 	public:
 
-		static constexpr int32_t texture_width = 1024;
-		static constexpr int32_t texture_height = 512;
+		static constexpr int32_t texture_width = 2560;
+		static constexpr int32_t texture_height = 1600;
 
 		~gpu ( );
 

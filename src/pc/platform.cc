@@ -33,6 +33,7 @@ namespace pc {
 		vm.attach_ports ( 0xE9, 0xE9, &ports );
 		vm.attach_ports ( power_management::base, power_management::base + 0x27, &power );
 		vm.attach_ports ( 0x3F8, 0x3FF, &serial );
+		vm.attach_ports ( 0xCF9, 0xCF9, &ports );
 		vm.attach_ports ( 0xCF8, 0xCFF, &pci );
 		vm.attach_memory ( ioapic::base, ioapic::window, router );
 		vm.set_legacy ( &pics );
@@ -153,10 +154,10 @@ namespace pc {
 
 	void platform::load ( uint64_t address, const uint8_t* data, uint32_t size ) {
 
-		uint8_t* memory = vm.memory ( );
+		uint8_t* memory = vm.core.host ( address, size );
 
-		for ( uint32_t i = 0; memory && i < size && address + i < vm.core.memory_size; i++ )
-			memory [ address + i ] = data [ i ];
+		for ( uint32_t i = 0; memory && i < size; i++ )
+			memory [ i ] = data [ i ];
 
 	}
 
