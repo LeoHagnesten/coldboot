@@ -25,6 +25,8 @@ namespace app {
 
 	int computer_main ( const wchar_t* path, vm::config& machine_file, const settings& theme, const wchar_t* smoke_path, const vm::launch_choice& choice );
 
+	void computer_record ( const wchar_t* path, double seconds, double from );
+
 	bool tools_wanted ( wchar_t** arguments, int32_t count );
 
 	int32_t tools_main ( wchar_t** arguments, int32_t count );
@@ -1221,6 +1223,21 @@ int program_main ( ) {
 			LocalFree ( arguments );
 
 			return app::manager_main ( folder );
+
+		}
+
+		if ( base::same_text ( arguments [ i ], L"--smoke-record" ) && i + 2 < argument_count ) {
+
+			double seconds = 0.0;
+			double from = 0.0;
+
+			for ( const wchar_t* digit = arguments [ i + 2 ]; *digit >= L'0' && *digit <= L'9'; digit++ )
+				seconds = seconds * 10.0 + ( *digit - L'0' );
+
+			for ( const wchar_t* digit = i + 3 < argument_count ? arguments [ i + 3 ] : L""; *digit >= L'0' && *digit <= L'9'; digit++ )
+				from = from * 10.0 + ( *digit - L'0' );
+
+			app::computer_record ( arguments [ i + 1 ], seconds, from );
 
 		}
 

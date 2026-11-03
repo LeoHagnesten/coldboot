@@ -3,6 +3,7 @@
 #include "app/dialogs.hh"
 #include "app/settings.hh"
 #include "base/files.hh"
+#include "base/gif.hh"
 #include "base/png.hh"
 #include "pc/computer.hh"
 #include "pc/iso.hh"
@@ -94,6 +95,15 @@ namespace app {
 	static bool slot_owed = false;
 	static bool lights_shown [ 2 ] = { };
 	static double refresh_period = 1.0 / 60.0;
+	static gif::writer* recorder = nullptr;
+	static wchar_t record_path [ MAX_PATH ] = { };
+	static double record_seconds = 0.0;
+	static double record_from = 0.0;
+	static double record_started = 0.0;
+	static bool shot_due = false;
+	static bool shot_taken = false;
+	static double record_next = 0.0;
+	static double ask_seen = 0.0;
 
 	struct send_job {
 
@@ -344,6 +354,28 @@ namespace app {
 		view.disc_light = now < disc_until;
 		view.disk_light = now < disk_until;
 		frontend->paint ( *display, view, now );
+
+		if ( shot_due ) {
+
+			display->save ( record_path );
+			shot_due = false;
+			shot_taken = true;
+
+		}
+
+		if ( recorder && now >= record_next ) {
+
+			base::list < uint32_t > grabbed;
+			int32_t across = 0;
+			int32_t down = 0;
+
+			if ( display->read ( grabbed, across, down ) )
+				recorder->frame ( grabbed.data ( ), across, down, 10, true );
+
+			record_next = now + 0.1;
+
+		}
+
 		display->end ( );
 
 	}
@@ -361,6 +393,9 @@ namespace app {
 	static bool frame_wanted ( double now ) {
 
 		bool lights [ 2 ] = { now < disc_until, now < disk_until };
+
+		if ( recorder && now >= record_next )
+			return true;
 
 		return machine->screen_changes ( ) != shown_changes || input_seen || frontend->animating ( now ) || lights [ 0 ] != lights_shown [ 0 ] || lights [ 1 ] != lights_shown [ 1 ] || now - last_present > 0.5;
 
@@ -1926,6 +1961,84 @@ namespace app {
 
 		double elapsed = now_seconds ( ) - smoke_started;
 
+		if ( record_seconds > 0.0 ) {
+
+			int32_t others = 0;
+			double now = now_seconds ( );
+
+			if ( !recorder && elapsed < record_from )
+				return;
+
+			int32_t length = base::text_length ( record_path );
+			bool still = length > 4 && ( record_path [ length - 3 ] | 0x20 ) == L'p' && ( record_path [ length - 2 ] | 0x20 ) == L'n' && ( record_path [ length - 1 ] | 0x20 ) == L'g';
+
+			if ( still ) {
+
+				if ( shot_taken )
+					DestroyWindow ( window );
+				else if ( !shot_due ) {
+
+					shot_due = true;
+					input_seen = true;
+
+				}
+
+				return;
+
+			}
+
+			if ( !recorder ) {
+
+				RECT client;
+
+				GetClientRect ( window, &client );
+				recorder = new gif::writer ( );
+
+				int32_t across = 800;
+				int32_t down = client.right > 0 ? static_cast < int32_t > ( static_cast < int64_t > ( across ) * client.bottom / client.right ) : 600;
+
+				if ( !recorder->open ( record_path, across, down ) ) {
+
+					delete recorder;
+					recorder = nullptr;
+					record_seconds = 0.0;
+
+				}
+
+				record_started = now;
+				record_next = now;
+
+			}
+
+			if ( waiting_ask ( others ) ) {
+
+				if ( ask_seen == 0.0 )
+					ask_seen = now;
+				else if ( now - ask_seen > 2.5 ) {
+
+					answer_ask ( true );
+					ask_seen = 0.0;
+					input_seen = true;
+
+				}
+
+			} else
+				ask_seen = 0.0;
+
+			if ( recorder && now - record_started >= record_seconds ) {
+
+				recorder->close ( );
+				delete recorder;
+				recorder = nullptr;
+				record_seconds = 0.0;
+				DestroyWindow ( window );
+
+			}
+
+			return;
+
+		}
+
 		if ( smoke_step == 0 && elapsed >= 8.0 ) {
 
 			base::writer path;
@@ -2320,6 +2433,14 @@ namespace app {
 				slot_owed = true;
 
 		}
+
+	}
+
+	void computer_record ( const wchar_t* path, double seconds, double from ) {
+
+		copy_wide ( record_path, path, MAX_PATH );
+		record_seconds = seconds;
+		record_from = from;
 
 	}
 

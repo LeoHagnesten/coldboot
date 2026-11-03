@@ -1462,10 +1462,10 @@ namespace ui {
 
 		static const wchar_t* const notes [ 4 ] = {
 
-			L"Text copied on one side pastes on the other. Files copied in Explorer paste as files.",
-			L"\"To machine\" only lets things into the machine, which keeps your PC safe from it.",
-			L"Sharing needs Coldboot Tools in the machine. Its window has an Install tools button.",
-			L"Clipboard files are limited to 1 GB. Send files and drag and drop have no limit.",
+			L"Text and files copied on one side paste on the other.",
+			L"\"To machine\" only lets things in, which keeps your PC safe.",
+			L"Sharing needs Coldboot Tools. The window has Install tools.",
+			L"Clipboard files stop at 1 GB. Send files has no limit.",
 
 		};
 

@@ -177,6 +177,8 @@ namespace render {
 
 		bool save ( const wchar_t* path );
 
+		bool read ( base::list < uint32_t >& out, int32_t& across, int32_t& down );
+
 		void fill ( rect area, float radius, color tint );
 
 		void stroke ( rect area, float radius, float width, color tint );

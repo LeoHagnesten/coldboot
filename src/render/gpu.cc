@@ -457,6 +457,16 @@ namespace render {
 
 	bool gpu::save ( const wchar_t* path ) {
 
+		base::list < uint32_t > pixels;
+		int32_t across = 0;
+		int32_t down = 0;
+
+		return read ( pixels, across, down ) && png::save ( path, pixels.data ( ), across, down );
+
+	}
+
+	bool gpu::read ( base::list < uint32_t >& out, int32_t& across, int32_t& down ) {
+
 		finish ( );
 
 		if ( !readback && target_texture ) {
@@ -482,24 +492,22 @@ namespace render {
 		if ( FAILED ( context->Map ( readback, 0, D3D11_MAP_READ, 0, &mapped ) ) )
 			return false;
 
-		uint32_t* pixels = static_cast < uint32_t* > ( runtime_allocate ( sizeof ( uint32_t ) * static_cast < size_t > ( width ) * height ) );
+		out.resize ( static_cast < size_t > ( width ) * height );
 
 		for ( int32_t y = 0; y < height; y++ ) {
 
 			const uint32_t* row = reinterpret_cast < const uint32_t* > ( static_cast < const uint8_t* > ( mapped.pData ) + static_cast < size_t > ( y ) * mapped.RowPitch );
 
 			for ( int32_t x = 0; x < width; x++ )
-				pixels [ static_cast < size_t > ( y ) * width + x ] = row [ x ] & 0xFFFFFF;
+				out [ static_cast < size_t > ( y ) * width + x ] = row [ x ] & 0xFFFFFF;
 
 		}
 
 		context->Unmap ( readback, 0 );
+		across = width;
+		down = height;
 
-		bool saved = png::save ( path, pixels, width, height );
-
-		runtime_release ( pixels );
-
-		return saved;
+		return true;
 
 	}
 

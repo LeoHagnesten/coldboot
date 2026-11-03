@@ -608,6 +608,16 @@ namespace tests {
 				view->open_sheet ( ui::SHEET_SETTINGS, now );
 				view->set_category ( 1 );
 
+			} else if ( sheet == 9 ) {
+
+				state.selected = 2;
+				view->apply_preset ( 0 );
+				view->form.name.set ( L"Windows 11" );
+				view->form.clipboard = 3;
+				view->form.file_sharing = 1;
+				view->open_sheet ( ui::SHEET_SETTINGS, now );
+				view->set_category ( 3 );
+
 			} else if ( sheet >= 6 && sheet <= 8 ) {
 
 				const wchar_t* name = L"Windows 11";
@@ -968,7 +978,7 @@ namespace tests {
 			} else if ( base::same_text ( option, L"--manager-sheet" ) ) {
 
 				i++;
-				manager_sheet = base::same_text ( value, L"new" ) ? 1 : ( base::same_text ( value, L"settings" ) ? 2 : ( base::same_text ( value, L"remove" ) ? 3 : ( base::same_text ( value, L"image" ) ? 4 : ( base::same_text ( value, L"system" ) ? 5 : ( base::same_text ( value, L"display" ) ? 6 : ( base::same_text ( value, L"privacy" ) ? 7 : ( base::same_text ( value, L"launch" ) ? 8 : 0 ) ) ) ) ) ) );
+				manager_sheet = base::same_text ( value, L"new" ) ? 1 : ( base::same_text ( value, L"settings" ) ? 2 : ( base::same_text ( value, L"remove" ) ? 3 : ( base::same_text ( value, L"image" ) ? 4 : ( base::same_text ( value, L"system" ) ? 5 : ( base::same_text ( value, L"display" ) ? 6 : ( base::same_text ( value, L"privacy" ) ? 7 : ( base::same_text ( value, L"launch" ) ? 8 : ( base::same_text ( value, L"sharing" ) ? 9 : 0 ) ) ) ) ) ) ) );
 
 			} else if ( base::same_text ( option, L"--console" ) ) {
 

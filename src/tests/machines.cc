@@ -1,6 +1,7 @@
 #ifdef COLDBOOT_DEBUG
 
 #include "base/files.hh"
+#include "base/gif.hh"
 #include "pc/iso.hh"
 #include "pc/storage.hh"
 #include "pc/vga.hh"
@@ -8,6 +9,7 @@
 #include "vm/unattend.hh"
 #include "tests/harness.hh"
 #include <shellapi.h>
+#include <wincodec.h>
 
 namespace tests {
 
@@ -441,6 +443,76 @@ namespace tests {
 		expect ( mixed && wide_back && untouched, "machines: a disposable disk reads its own writes, mixes them with the image, and leaves the image untouched" );
 
 		delete scratch_disk;
+
+		base::writer gif_path;
+		gif::writer* recorder = new gif::writer ( );
+		uint32_t* picture = static_cast < uint32_t* > ( runtime_allocate ( sizeof ( uint32_t ) * 128 * 96 ) );
+
+		gif_path.add ( scratch.text ( ) ).add ( L"\\demo.gif" );
+
+		for ( int32_t i = 0; i < 128 * 96; i++ )
+			picture [ i ] = static_cast < uint32_t > ( ( i % 128 ) * 2 ) << 16 | static_cast < uint32_t > ( ( i / 128 ) * 2 ) << 8 | 0x40;
+
+		bool recorded = recorder->open ( gif_path.text ( ), 64, 48 );
+
+		recorder->frame ( picture, 128, 96, 10, false );
+		recorder->frame ( picture, 128, 96, 10, false );
+
+		for ( int32_t y = 40; y < 60; y++ ) {
+
+			for ( int32_t x = 20; x < 40; x++ )
+				picture [ y * 128 + x ] = 0xFF2020;
+
+		}
+
+		recorder->frame ( picture, 128, 96, 10, false );
+		recorded = recorded && recorder->frames == 2 && recorder->close ( );
+		runtime_release ( picture );
+		delete recorder;
+
+		HRESULT com = CoInitializeEx ( nullptr, COINIT_MULTITHREADED );
+		IWICImagingFactory* factory = nullptr;
+		IWICBitmapDecoder* decoder = nullptr;
+		IWICBitmapFrameDecode* first_frame = nullptr;
+		IWICBitmapFrameDecode* second_frame = nullptr;
+		IWICFormatConverter* converter = nullptr;
+		UINT frame_count = 0;
+		UINT second_width = 0;
+		UINT second_height = 0;
+		uint32_t decoded [ 64 * 48 ] = { };
+		bool decodes = recorded && SUCCEEDED ( CoCreateInstance ( CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS ( &factory ) ) );
+
+		decodes = decodes && SUCCEEDED ( factory->CreateDecoderFromFilename ( gif_path.text ( ), nullptr, GENERIC_READ, WICDecodeMetadataCacheOnDemand, &decoder ) );
+		decodes = decodes && SUCCEEDED ( decoder->GetFrameCount ( &frame_count ) ) && frame_count == 2;
+		decodes = decodes && SUCCEEDED ( decoder->GetFrame ( 0, &first_frame ) ) && SUCCEEDED ( decoder->GetFrame ( 1, &second_frame ) );
+		decodes = decodes && SUCCEEDED ( second_frame->GetSize ( &second_width, &second_height ) );
+		decodes = decodes && SUCCEEDED ( factory->CreateFormatConverter ( &converter ) ) && SUCCEEDED ( converter->Initialize ( first_frame, GUID_WICPixelFormat32bppBGRA, WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom ) );
+		decodes = decodes && SUCCEEDED ( converter->CopyPixels ( nullptr, 64 * 4, sizeof ( decoded ), reinterpret_cast < BYTE* > ( decoded ) ) );
+
+		uint32_t sample = decoded [ 24 * 64 + 32 ];
+		int32_t red = static_cast < int32_t > ( sample >> 16 & 255 );
+		int32_t green = static_cast < int32_t > ( sample >> 8 & 255 );
+		bool close_enough = red > 128 - 16 && red < 128 + 16 && green > 96 - 16 && green < 96 + 16;
+
+		if ( converter )
+			converter->Release ( );
+
+		if ( second_frame )
+			second_frame->Release ( );
+
+		if ( first_frame )
+			first_frame->Release ( );
+
+		if ( decoder )
+			decoder->Release ( );
+
+		if ( factory )
+			factory->Release ( );
+
+		if ( SUCCEEDED ( com ) )
+			CoUninitialize ( );
+
+		expect ( decodes && close_enough && second_width == 10 && second_height == 10, "machines: recordings are GIFs Windows decodes, with only the changed part stored after the first frame" );
 
 		remove_tree ( scratch.text ( ) );
 

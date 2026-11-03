@@ -1,5 +1,6 @@
 #ifdef COLDBOOT_DEBUG
 
+#include "base/gif.hh"
 #include "base/png.hh"
 #include "pc/computer.hh"
 #include "pc/iso.hh"
@@ -544,6 +545,12 @@ namespace tests {
 		int32_t script_next = 0;
 		double seconds = 20.0;
 		double every = 5.0;
+		const wchar_t* record_path = nullptr;
+		double record_every = 0.1;
+		double record_speed = 1.0;
+		double record_from = 0.0;
+		int32_t record_width = 640;
+		int32_t record_height = 480;
 		pc::computer_options* options = new pc::computer_options ( );
 
 		for ( int32_t i = 1; i < count; i++ ) {
@@ -619,6 +626,35 @@ namespace tests {
 				options->local_network = false;
 			else if ( base::same_text ( arguments [ i ], L"--ask" ) )
 				options->ask_internet = true;
+			else if ( base::same_text ( arguments [ i ], L"--record" ) )
+				record_path = next ( );
+			else if ( base::same_text ( arguments [ i ], L"--record-every" ) )
+				record_every = number ( next ( ) ) / 1000.0;
+			else if ( base::same_text ( arguments [ i ], L"--record-speed" ) )
+				record_speed = number ( next ( ) );
+			else if ( base::same_text ( arguments [ i ], L"--record-from" ) )
+				record_from = number ( next ( ) );
+			else if ( base::same_text ( arguments [ i ], L"--record-size" ) ) {
+
+				const wchar_t* value = next ( );
+				int32_t across = 0;
+				int32_t down = 0;
+				int32_t c = 0;
+
+				for ( ; value [ c ] >= L'0' && value [ c ] <= L'9'; c++ )
+					across = across * 10 + ( value [ c ] - L'0' );
+
+				for ( c += value [ c ] ? 1 : 0; value [ c ] >= L'0' && value [ c ] <= L'9'; c++ )
+					down = down * 10 + ( value [ c ] - L'0' );
+
+				if ( across >= 64 && down >= 48 ) {
+
+					record_width = across;
+					record_height = down;
+
+				}
+
+			}
 			else if ( base::same_text ( arguments [ i ], L"--proxy" ) ) {
 
 				const wchar_t* value = next ( );
@@ -758,13 +794,50 @@ namespace tests {
 		int32_t shot = 0;
 		bool typed_done = typed == nullptr;
 		int32_t resets = 0;
+		gif::writer* recorder = nullptr;
+		double next_record = record_from;
+
+		if ( record_path ) {
+
+			recorder = new gif::writer ( );
+
+			if ( !recorder->open ( record_path, record_width, record_height ) ) {
+
+				print ( "record: couldn't open the file\r\n" );
+				delete recorder;
+				recorder = nullptr;
+
+			}
+
+		}
 
 		while ( now_seconds ( ) - started < seconds ) {
 
-			Sleep ( 50 );
+			Sleep ( recorder && record_every < 0.05 ? 10 : 50 );
 
 			double elapsed = now_seconds ( ) - started;
 			pc::computer_event event = machine->poll ( );
+
+			if ( recorder && elapsed >= next_record ) {
+
+				int32_t width = 0;
+				int32_t height = 0;
+
+				if ( machine->screen ( pixels, width, height, now_seconds ( ) ) && width > 0 && height > 0 ) {
+
+					bool legacy = height == 200 || ( height == 400 && ( width == 720 || width == 640 || width == 360 ) );
+					uint32_t delay = static_cast < uint32_t > ( record_every * 100.0 / ( record_speed > 0.0 ? record_speed : 1.0 ) + 0.5 );
+
+					recorder->frame ( pixels, width, height, delay, legacy );
+
+				}
+
+				next_record += record_every;
+
+				if ( next_record < elapsed )
+					next_record = elapsed + record_every;
+
+			}
 
 			if ( event == pc::EVENT_RESET ) {
 
@@ -878,6 +951,18 @@ namespace tests {
 		}
 
 		save_screen ( *machine, folder, L"final.png", pixels );
+
+		if ( recorder ) {
+
+			char note [ 96 ];
+			int32_t frames = recorder->frames;
+			bool closed = recorder->close ( );
+
+			wsprintfA ( note, "record: %d frames%s\r\n", frames, closed ? "" : ", but the file failed" );
+			print ( note );
+			delete recorder;
+
+		}
 
 		static char console [ 65536 ];
 
