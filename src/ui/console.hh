@@ -21,6 +21,9 @@ namespace ui {
 		TOOL_TYPE,
 		TOOL_SAVE,
 		TOOL_TOOLS,
+		TOOL_ALLOW,
+		TOOL_BLOCK,
+		TOOL_REMEMBER,
 		TOOL_COUNT,
 
 	};
@@ -45,6 +48,15 @@ namespace ui {
 		bool disc_light = false;
 		bool can_save = false;
 		bool tools_linked = false;
+		bool fresh = true;
+		bool smooth = false;
+		uint8_t scaling = 0;
+		int32_t fps = -1;
+		bool private_run = false;
+		const wchar_t* ask_app = nullptr;
+		const wchar_t* ask_target = L"";
+		int32_t ask_more = 0;
+		bool ask_remember = false;
 
 	};
 
@@ -70,11 +82,12 @@ namespace ui {
 
 		bool over_screen ( float x, float y ) const {
 
-			return frame_area.w > 0.0f && frame_area.contains ( x, y );
+			return frame_area.w > 0.0f && frame_area.contains ( x, y ) && !( ask_area.w > 0.0f && ask_area.contains ( x, y ) );
 
 		}
 
 		render::rect frame_area;
+		render::rect ask_area;
 
 	private:
 
@@ -96,6 +109,8 @@ namespace ui {
 		void paint_screen ( render::gpu& gpu, const theme& colors, const console_view& state );
 
 		void paint_status ( render::gpu& gpu, const theme& colors, const console_view& state, double now );
+
+		void paint_ask ( render::gpu& gpu, const theme& colors, const console_view& state );
 
 		hit hits [ 32 ];
 		int32_t hit_count = 0;

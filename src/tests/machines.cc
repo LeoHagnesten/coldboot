@@ -2,6 +2,8 @@
 
 #include "base/files.hh"
 #include "pc/iso.hh"
+#include "pc/storage.hh"
+#include "pc/vga.hh"
 #include "vm/library.hh"
 #include "vm/unattend.hh"
 #include "tests/harness.hh"
@@ -329,6 +331,116 @@ namespace tests {
 		delete plain;
 		delete labelled;
 		delete answers;
+
+		vm::config* tuned = new vm::config ( );
+		vm::config* tuned_copy = new vm::config ( );
+		base::list < char > tuned_text;
+
+		copy_wide ( tuned->name, L"Private box", vm::name_room );
+		tuned->machine = vm::MACHINE_PC;
+		tuned->screen_width = 1920;
+		tuned->screen_height = 1080;
+		tuned->frame_rate = 144;
+		tuned->scaling = 1;
+		tuned->smooth = true;
+		tuned->frame_counter = true;
+		tuned->local_network = false;
+		tuned->use_proxy = true;
+		tuned->ask_internet = true;
+		tuned->fresh_identity = true;
+		tuned->disposable = true;
+		tuned->keep_preview = false;
+
+		for ( int32_t i = 0; "127.0.0.1:9050" [ i ]; i++ )
+			tuned->proxy [ i ] = "127.0.0.1:9050" [ i ];
+
+		vm::serialize ( *tuned, tuned_text );
+
+		bool tuned_parsed = vm::parse ( tuned_text.data ( ), tuned_text.count ( ), *tuned_copy, error, sizeof ( error ) );
+		bool tuned_kept = tuned_parsed && tuned_copy->screen_width == 1920 && tuned_copy->screen_height == 1080 && tuned_copy->frame_rate == 144 && tuned_copy->scaling == 1 && tuned_copy->smooth && tuned_copy->frame_counter && !tuned_copy->local_network && tuned_copy->use_proxy && base::same_text ( tuned_copy->proxy, "127.0.0.1:9050" ) && tuned_copy->fresh_identity && tuned_copy->disposable && !tuned_copy->keep_preview && tuned_copy->ask_internet;
+		vm::config* plain_box = new vm::config ( );
+		bool quiet = !plain_box->disposable && !plain_box->fresh_identity && plain_box->local_network && !plain_box->use_proxy && plain_box->keep_preview && !plain_box->ask_internet && !plain_box->screen_width && !vm::private_run ( *plain_box );
+		bool picky = rejected ( "coldboot=1\nname=Box\nmachine=pc\nscreen=9000x10\n", "640x400" )
+			&& rejected ( "coldboot=1\nname=Box\nmachine=pc\nproxy=no port\n", "host:port" )
+			&& rejected ( "coldboot=1\nname=Box\nmachine=pc\nframe_rate=fast\n", "display" )
+			&& rejected ( "coldboot=1\nname=Box\nmachine=pc\nidentity=secret\n", "stable or fresh" );
+
+		expect ( tuned_kept && quiet && picky, "machines: display and privacy settings round-trip, start out off, and bad values are refused" );
+
+		static const wchar_t* const launch_line [ ] = { L"Coldboot.exe", L"--vm", L"x.coldboot", L"--disposable", L"1", L"--identity", L"fresh", L"--local-network", L"0", L"--route", L"proxy" };
+		vm::launch_choice choice;
+		vm::config* once = new vm::config ( *plain_box );
+
+		bool read_choice = vm::read_launch ( launch_line, 11, choice );
+
+		vm::apply_launch ( choice, *once );
+
+		bool no_proxy_yet = once->disposable && once->fresh_identity && !once->local_network && !once->use_proxy;
+
+		for ( int32_t i = 0; "10.1.2.3:1080" [ i ]; i++ )
+			once->proxy [ i ] = "10.1.2.3:1080" [ i ];
+
+		vm::apply_launch ( choice, *once );
+
+		expect ( read_choice && no_proxy_yet && once->use_proxy && vm::private_run ( *once ) && !plain_box->disposable, "machines: start options apply to one run only, and the proxy route needs a saved proxy" );
+
+		delete once;
+		delete plain_box;
+		delete tuned;
+		delete tuned_copy;
+
+		uint8_t monitor [ 128 ];
+		uint8_t standard [ 128 ];
+		uint8_t sum = 0;
+
+		pc::vga::build_edid ( 1280, 800, monitor );
+		pc::vga::build_edid ( 1024, 768, standard );
+
+		for ( uint8_t value : monitor )
+			sum = static_cast < uint8_t > ( sum + value );
+
+		bool timed = sum == 0 && ( monitor [ 56 ] | ( monitor [ 58 ] >> 4 ) << 8 ) == 1280 && ( monitor [ 59 ] | ( monitor [ 61 ] >> 4 ) << 8 ) == 800 && standard [ 12 ] == 1 && monitor [ 12 ] != standard [ 12 ] && ( standard [ 56 ] | ( standard [ 58 ] >> 4 ) << 8 ) == 1024;
+
+		expect ( timed, "machines: the monitor's EDID names the chosen resolution as its native mode and stays the same for 1024 x 768" );
+
+		base::writer base_path;
+		base::list < char > pattern;
+
+		base_path.add ( scratch.text ( ) ).add ( L"\\base.img" );
+
+		for ( int32_t i = 0; i < 65536; i++ )
+			pattern.push ( static_cast < char > ( i * 7 ) );
+
+		files::write ( base_path.text ( ), pattern.data ( ), 65536 );
+
+		pc::disk_file* scratch_disk = new pc::disk_file ( );
+		uint8_t sector [ 512 ];
+		uint8_t disk_back [ 9000 ];
+		uint8_t wide_write [ 8192 ];
+		bool opened = scratch_disk->open_disposable ( base_path.text ( ) ) && scratch_disk->disposable ( ) && scratch_disk->writable && scratch_disk->size == 65536;
+
+		for ( int32_t i = 0; i < 512; i++ )
+			sector [ i ] = 0xA5;
+
+		for ( int32_t i = 0; i < 8192; i++ )
+			wide_write [ i ] = static_cast < uint8_t > ( 0x40 + i % 13 );
+
+		bool writes = opened && scratch_disk->write ( 4096 + 1024, sector, 512 ) && scratch_disk->write ( 16384, wide_write, 8192 );
+		bool reads = writes && scratch_disk->read ( 4096, disk_back, 9000 );
+		bool mixed = reads && disk_back [ 0 ] == static_cast < uint8_t > ( 4096 * 7 ) && disk_back [ 1024 ] == 0xA5 && disk_back [ 1535 ] == 0xA5 && disk_back [ 1536 ] == static_cast < uint8_t > ( ( 4096 + 1536 ) * 7 );
+		bool wide_back = scratch_disk->read ( 16384 - 100, disk_back, 8292 ) && disk_back [ 99 ] == static_cast < uint8_t > ( ( 16384 - 1 ) * 7 ) && disk_back [ 100 ] == 0x40 && disk_back [ 100 + 8191 ] == static_cast < uint8_t > ( 0x40 + 8191 % 13 );
+
+		scratch_disk->close ( );
+
+		base::list < char > after;
+		bool untouched = files::read ( base_path.text ( ), after ) && after.count ( ) >= 65536;
+
+		for ( int32_t i = 0; untouched && i < 65536; i++ )
+			untouched = after [ i ] == pattern [ i ];
+
+		expect ( mixed && wide_back && untouched, "machines: a disposable disk reads its own writes, mixes them with the image, and leaves the image untouched" );
+
+		delete scratch_disk;
 
 		remove_tree ( scratch.text ( ) );
 

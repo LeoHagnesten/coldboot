@@ -337,7 +337,7 @@ namespace app {
 
 	}
 
-	static void start_selected ( ) {
+	static void start_selected ( const wchar_t* extra = L"" ) {
 
 		if ( selected < 0 || !shelf->at ( selected ).readable )
 			return;
@@ -373,7 +373,7 @@ namespace app {
 		PROCESS_INFORMATION process = { };
 
 		GetModuleFileNameW ( nullptr, program, MAX_PATH );
-		command.add ( L"\"" ).add ( program ).add ( L"\" --vm \"" ).add ( path ).add ( L"\"" );
+		command.add ( L"\"" ).add ( program ).add ( L"\" --vm \"" ).add ( path ).add ( L"\"" ).add ( extra );
 
 		static wchar_t line [ base::writer::capacity ];
 
@@ -461,8 +461,49 @@ namespace app {
 		out.network = form.network;
 		out.clipboard = form.clipboard;
 		out.file_sharing = form.file_sharing;
+		out.screen_width = form.screen_width;
+		out.screen_height = form.screen_height;
+		out.frame_rate = form.frame_rate;
+		out.scaling = form.scaling;
+		out.smooth = form.smooth;
+		out.frame_counter = form.frame_counter;
+		out.local_network = form.local_network;
+		out.fresh_identity = form.fresh_identity;
+		out.disposable = form.disposable;
+		out.keep_preview = form.keep_preview;
+
+		for ( int32_t i = 0; i <= form.proxy.length && i < 127; i++ )
+			out.proxy [ i ] = static_cast < char > ( form.proxy.text [ i ] );
+
+		out.use_proxy = form.use_proxy && out.proxy [ 0 ];
+		out.ask_internet = form.ask_internet;
 		copy_text ( out.iso, form.iso, MAX_PATH );
 		copy_text ( out.disk, form.disk_mode == 1 || view->sheet == ui::SHEET_SETTINGS ? form.disk : L"", MAX_PATH );
+
+	}
+
+	static void config_to_form ( const vm::config& source ) {
+
+		ui::machine_form& form = view->form;
+		wchar_t proxy [ 128 ] = { };
+
+		form.screen_width = source.screen_width;
+		form.screen_height = source.screen_height;
+		form.frame_rate = source.frame_rate;
+		form.scaling = source.scaling;
+		form.smooth = source.smooth;
+		form.frame_counter = source.frame_counter;
+		form.local_network = source.local_network;
+		form.use_proxy = source.use_proxy && source.proxy [ 0 ];
+		form.ask_internet = source.ask_internet;
+		form.fresh_identity = source.fresh_identity;
+		form.disposable = source.disposable;
+		form.keep_preview = source.keep_preview;
+
+		for ( int32_t i = 0; source.proxy [ i ] && i < 127; i++ )
+			proxy [ i ] = static_cast < wchar_t > ( static_cast < uint8_t > ( source.proxy [ i ] ) );
+
+		form.proxy.set ( proxy );
 
 	}
 
@@ -566,9 +607,42 @@ namespace app {
 		view->form.disk_mode = source.disk [ 0 ] ? 1 : 2;
 		copy_text ( view->form.iso, source.iso, ui::path_room );
 		copy_text ( view->form.disk, source.disk, ui::path_room );
+		config_to_form ( source );
 		view->subject_running = vm::is_running ( shelf->at ( selected ).path );
 		view->open_sheet ( ui::SHEET_SETTINGS, now_seconds ( ) );
 		render ( );
+
+	}
+
+	static void open_launch ( ) {
+
+		if ( selected < 0 || !shelf->at ( selected ).readable || vm::is_running ( shelf->at ( selected ).path ) )
+			return;
+
+		const vm::config& source = shelf->at ( selected ).settings;
+
+		view->form = ui::machine_form ( );
+		view->form.modern = source.machine == vm::MACHINE_PC;
+		config_to_form ( source );
+		copy_text ( view->subject, source.name, 64 );
+		view->subject_running = false;
+		view->open_sheet ( ui::SHEET_LAUNCH, now_seconds ( ) );
+		render ( );
+
+	}
+
+	static void launch_selected ( ) {
+
+		const ui::machine_form& form = view->form;
+		base::writer extra;
+
+		extra.add ( L" --disposable " ).add ( form.disposable ? L"1" : L"0" );
+		extra.add ( L" --identity " ).add ( form.fresh_identity ? L"fresh" : L"stable" );
+		extra.add ( L" --local-network " ).add ( form.local_network ? L"1" : L"0" );
+		extra.add ( L" --route " ).add ( form.use_proxy && form.proxy.length ? L"proxy" : L"direct" );
+		extra.add ( L" --internet " ).add ( form.ask_internet ? L"ask" : L"open" );
+		view->close_sheet ( );
+		start_selected ( extra.text ( ) );
 
 	}
 
@@ -588,6 +662,17 @@ namespace app {
 		}
 
 		form_to_config ( item.settings );
+
+		wchar_t folder [ MAX_PATH ];
+
+		if ( !item.settings.keep_preview && vm::folder_of ( item.path, folder ) ) {
+
+			base::writer preview;
+
+			preview.add ( folder ).add ( L"\\preview.bin" );
+			DeleteFileW ( preview.text ( ) );
+
+		}
 
 		if ( !vm::save ( item.path, item.settings ) ) {
 
@@ -708,6 +793,14 @@ namespace app {
 
 			case ui::ACTION_START:
 				start_selected ( );
+				break;
+
+			case ui::ACTION_LAUNCH_OPTIONS:
+				open_launch ( );
+				break;
+
+			case ui::ACTION_LAUNCH:
+				launch_selected ( );
 				break;
 
 			case ui::ACTION_NEW:

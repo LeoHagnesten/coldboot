@@ -62,6 +62,19 @@ namespace vm {
 		uint8_t clipboard = 3;
 		uint8_t file_sharing = 3;
 		bool unattended = false;
+		uint16_t screen_width = 0;
+		uint16_t screen_height = 0;
+		uint16_t frame_rate = 0;
+		uint8_t scaling = 0;
+		bool smooth = false;
+		bool frame_counter = false;
+		bool local_network = true;
+		char proxy [ 128 ] = { };
+		bool use_proxy = false;
+		bool ask_internet = false;
+		bool fresh_identity = false;
+		bool disposable = false;
+		bool keep_preview = true;
 		wchar_t iso [ MAX_PATH ] = { };
 		wchar_t disk [ MAX_PATH ] = { };
 		bool turbo = false;
@@ -78,6 +91,39 @@ namespace vm {
 		wchar_t notes [ notes_room ] = { };
 
 	};
+
+	struct screen_size {
+
+		uint16_t width;
+		uint16_t height;
+
+	};
+
+	static constexpr int32_t screen_choice_count = 8;
+
+	const screen_size* screen_choices ( );
+
+	static constexpr int32_t frame_choice_count = 6;
+
+	const uint16_t* frame_choices ( );
+
+	bool valid_proxy ( const char* text, int32_t length );
+
+	struct launch_choice {
+
+		int8_t disposable = -1;
+		int8_t fresh_identity = -1;
+		int8_t local_network = -1;
+		int8_t use_proxy = -1;
+		int8_t ask_internet = -1;
+
+	};
+
+	bool read_launch ( const wchar_t* const* arguments, int32_t count, launch_choice& out );
+
+	void apply_launch ( const launch_choice& choice, config& run );
+
+	bool private_run ( const config& run );
 
 	bool valid_name ( const wchar_t* name );
 

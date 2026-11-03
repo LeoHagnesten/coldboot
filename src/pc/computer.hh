@@ -20,6 +20,13 @@ namespace pc {
 		bool network = true;
 		bool uefi = false;
 		uint32_t sharing = SHARE_TEXT_IN | SHARE_TEXT_OUT | SHARE_FILES_IN | SHARE_FILES_OUT;
+		uint16_t screen_width = 0;
+		uint16_t screen_height = 0;
+		bool local_network = true;
+		bool ask_internet = false;
+		bool fresh_identity = false;
+		bool disposable = false;
+		char proxy [ 128 ] = { };
 		wchar_t iso [ MAX_PATH ] = { };
 		wchar_t disk [ MAX_PATH ] = { };
 		wchar_t helper [ MAX_PATH ] = { };
@@ -74,6 +81,12 @@ namespace pc {
 
 		bool screen ( uint32_t* out, int32_t& width, int32_t& height, double now );
 
+		uint64_t screen_changes ( ) const {
+
+			return video ? video->changes : 0;
+
+		}
+
 		int32_t console_text ( char* out, int32_t room );
 
 		bool running ( ) const {
@@ -108,6 +121,7 @@ namespace pc {
 
 		long seen_polls = 0;
 		uint64_t polled_at = 0;
+		uint64_t identity_seed = 0;
 
 	};
 

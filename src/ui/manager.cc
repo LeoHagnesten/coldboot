@@ -1,5 +1,6 @@
 #include "ui/manager.hh"
 #include "base/math.hh"
+#include "vm/config.hh"
 #include "vm/unattend.hh"
 #include <windows.h>
 
@@ -288,7 +289,7 @@ namespace ui {
 		if ( press_action == ACTION_FIELD && editing ( ) ) {
 
 			field_focused = true;
-			focus = base::clamp ( press_index, 0, 2 );
+			focus = base::clamp ( press_index, 0, 3 );
 			caret_since = now;
 			active_field ( ).move ( caret_from ( x ), GetKeyState ( VK_SHIFT ) < 0 );
 
@@ -450,6 +451,66 @@ namespace ui {
 			case ACTION_CATEGORY:
 				category = index;
 				field_focused = index == 0 && editing ( );
+				focus = 0;
+				return ACTION_NONE;
+
+			case ACTION_SCREEN:
+
+				if ( index >= 0 && index < vm::screen_choice_count ) {
+
+					form.screen_width = vm::screen_choices ( ) [ index ].width;
+					form.screen_height = vm::screen_choices ( ) [ index ].height;
+
+				}
+
+				return ACTION_NONE;
+
+			case ACTION_FRAME_RATE:
+				form.frame_rate = vm::frame_choices ( ) [ base::clamp ( index, 0, vm::frame_choice_count - 1 ) ];
+				return ACTION_NONE;
+
+			case ACTION_SCALING:
+				form.scaling = static_cast < uint8_t > ( base::clamp ( index, 0, 2 ) );
+				return ACTION_NONE;
+
+			case ACTION_FILTER:
+				form.smooth = index == 1;
+				return ACTION_NONE;
+
+			case ACTION_COUNTER:
+				form.frame_counter = index == 1;
+				return ACTION_NONE;
+
+			case ACTION_LAN:
+				form.local_network = index == 0;
+				return ACTION_NONE;
+
+			case ACTION_ROUTE:
+				form.use_proxy = index == 1;
+
+				if ( form.use_proxy && sheet == SHEET_SETTINGS && editing ( ) ) {
+
+					focus = 3;
+					field_focused = true;
+
+				}
+
+				return ACTION_NONE;
+
+			case ACTION_IDENTITY:
+				form.fresh_identity = index == 1;
+				return ACTION_NONE;
+
+			case ACTION_DISPOSABLE:
+				form.disposable = index == 1;
+				return ACTION_NONE;
+
+			case ACTION_PREVIEW:
+				form.keep_preview = index == 0;
+				return ACTION_NONE;
+
+			case ACTION_INTERNET:
+				form.ask_internet = index == 1;
 				return ACTION_NONE;
 
 			case ACTION_SLIDER:
@@ -496,8 +557,11 @@ namespace ui {
 				if ( sheet == SHEET_NEW && name_valid ( ) && ( !asks_user ( ) || user_valid ( ) ) )
 					return ACTION_CREATE;
 
-				if ( sheet == SHEET_SETTINGS && editing ( ) && name_valid ( ) )
+				if ( sheet == SHEET_SETTINGS && editing ( ) && name_valid ( ) && proxy_valid ( ) )
 					return ACTION_SAVE;
+
+				if ( sheet == SHEET_LAUNCH )
+					return ACTION_LAUNCH;
 
 				return ACTION_NONE;
 
@@ -596,6 +660,26 @@ namespace ui {
 	bool manager::user_valid ( ) const {
 
 		return vm::user_name_valid ( form.user.text );
+
+	}
+
+	bool manager::proxy_valid ( ) const {
+
+		if ( !form.use_proxy && !form.proxy.length )
+			return true;
+
+		char narrow [ text_field::room + 1 ] = { };
+
+		for ( int32_t i = 0; i < form.proxy.length; i++ ) {
+
+			if ( form.proxy.text [ i ] > 127 )
+				return false;
+
+			narrow [ i ] = static_cast < char > ( form.proxy.text [ i ] );
+
+		}
+
+		return vm::valid_proxy ( narrow, form.proxy.length );
 
 	}
 
@@ -751,13 +835,13 @@ namespace ui {
 				gpu.fill ( segment, corner - 1.0f, colors.raised );
 				gpu.stroke ( segment, corner - 1.0f, 1.0f, colors.divider );
 
-			} else if ( enabled && glow ( target, i ) > 0.01f )
-				gpu.fill ( segment, corner - 1.0f, fade ( colors.hover, glow ( target, i ) ) );
+			} else if ( enabled && glow ( target, i + segmented_offset ) > 0.01f )
+				gpu.fill ( segment, corner - 1.0f, fade ( colors.hover, glow ( target, i + segmented_offset ) ) );
 
 			gpu.text ( labels [ i ], i == selected ? render::FONT_SMALL_STRONG : render::FONT_SMALL, segment, enabled ? ( i == selected ? colors.text : colors.muted ) : colors.faint, render::ALIGN_CENTER );
 
 			if ( enabled )
-				add_hit ( segment, target, i );
+				add_hit ( segment, target, i + segmented_offset );
 
 		}
 
@@ -765,7 +849,7 @@ namespace ui {
 
 	void manager::field ( render::gpu& gpu, const theme& colors, rect area, double now, int32_t which, const wchar_t* placeholder, bool masked ) {
 
-		const text_field& name = which == 1 ? form.user : ( which == 2 ? form.password : form.name );
+		const text_field& name = which == 1 ? form.user : ( which == 2 ? form.password : ( which == 3 ? form.proxy : form.name ) );
 		bool active = field_focused && editing ( ) && focus == which;
 		float left = area.x + 10.0f;
 		int32_t from = 0;
@@ -889,6 +973,10 @@ namespace ui {
 		gpu.fill ( rect { x + 6.0f, 13.0f, 1.0f, toolbar - 26.0f }, 0.0f, colors.divider );
 		x += 14.0f;
 		x = tool ( gpu, colors, x, running ? L"Show" : L"Start", running ? render::ICON_MONITOR : render::ICON_PLAY, ACTION_START, usable );
+
+		if ( usable && state.machines [ state.selected ].modern )
+			x = tool ( gpu, colors, x, L"Start options", render::ICON_LOCK, ACTION_LAUNCH_OPTIONS, !running );
+
 		x = tool ( gpu, colors, x, L"Settings", render::ICON_SLIDERS, ACTION_SETTINGS, usable );
 		tool ( gpu, colors, x, L"Remove", render::ICON_TRASH, ACTION_REMOVE, chosen );
 
@@ -1392,6 +1480,142 @@ namespace ui {
 
 	}
 
+	float manager::paint_pc_display ( render::gpu& gpu, const theme& colors, float x, float y, float inner, bool enabled ) {
+
+		static const wchar_t* const sizes [ vm::screen_choice_count ] = { L"Automatic", L"1024 \x00D7 768", L"1280 \x00D7 720", L"1280 \x00D7 800", L"1366 \x00D7 768", L"1600 \x00D7 900", L"1920 \x00D7 1080", L"2560 \x00D7 1440" };
+		static const wchar_t* const rates [ vm::frame_choice_count ] = { L"Display", L"30", L"60", L"90", L"120", L"144" };
+		static const wchar_t* const scalings [ 3 ] = { L"Fit window", L"Whole steps", L"Actual size" };
+		static const wchar_t* const filters [ 2 ] = { L"Sharp", L"Smooth" };
+		static const wchar_t* const counters [ 2 ] = { L"Hidden", L"Shown" };
+		float control_x = x + label_column;
+		float span = inner - label_column;
+		color label_tint = enabled ? colors.muted : colors.faint;
+		int32_t size_index = -1;
+		int32_t rate_index = -1;
+
+		for ( int32_t i = 0; i < vm::screen_choice_count; i++ ) {
+
+			if ( vm::screen_choices ( ) [ i ].width == form.screen_width && vm::screen_choices ( ) [ i ].height == form.screen_height )
+				size_index = i;
+
+		}
+
+		for ( int32_t i = 0; i < vm::frame_choice_count; i++ ) {
+
+			if ( vm::frame_choices ( ) [ i ] == form.frame_rate )
+				rate_index = i;
+
+		}
+
+		gpu.text ( L"Resolution", render::FONT_BODY, rect { x, y, label_column, control_height }, label_tint, render::ALIGN_LEFT );
+		segmented ( gpu, colors, rect { control_x, y, span, control_height }, sizes, 4, size_index < 4 ? size_index : -1, ACTION_SCREEN, enabled );
+		y += control_height + 4.0f;
+
+		const wchar_t* const* upper = sizes + 4;
+
+		segmented_offset = 4;
+		segmented ( gpu, colors, rect { control_x, y, span, control_height }, upper, 4, size_index >= 4 ? size_index - 4 : -1, ACTION_SCREEN, enabled );
+		segmented_offset = 0;
+		y += control_height + 10.0f;
+		gpu.text ( L"Frame rate", render::FONT_BODY, rect { x, y, label_column, control_height }, label_tint, render::ALIGN_LEFT );
+		segmented ( gpu, colors, rect { control_x, y, span, control_height }, rates, vm::frame_choice_count, rate_index, ACTION_FRAME_RATE, enabled );
+		y += control_height + 10.0f;
+		gpu.text ( L"Scaling", render::FONT_BODY, rect { x, y, label_column, control_height }, label_tint, render::ALIGN_LEFT );
+		segmented ( gpu, colors, rect { control_x, y, span, control_height }, scalings, 3, form.scaling, ACTION_SCALING, enabled );
+		y += control_height + 10.0f;
+		gpu.text ( L"Filter", render::FONT_BODY, rect { x, y, label_column, control_height }, label_tint, render::ALIGN_LEFT );
+		segmented ( gpu, colors, rect { control_x, y, span, control_height }, filters, 2, form.smooth ? 1 : 0, ACTION_FILTER, enabled );
+		y += control_height + 10.0f;
+		gpu.text ( L"Frame counter", render::FONT_BODY, rect { x, y, label_column, control_height }, label_tint, render::ALIGN_LEFT );
+		segmented ( gpu, colors, rect { control_x, y, span, control_height }, counters, 2, form.frame_counter ? 1 : 0, ACTION_COUNTER, enabled );
+		y += control_height + 12.0f;
+
+		static const wchar_t* const notes [ 2 ] = {
+
+			L"Chosen resolutions apply at start. BIOS machines need the tools.",
+			L"\"Display\" follows your monitor's refresh rate with no tearing.",
+
+		};
+
+		for ( const wchar_t* note : notes ) {
+
+			gpu.text ( note, render::FONT_SMALL, rect { control_x, y, span, 18.0f }, colors.faint, render::ALIGN_LEFT );
+			y += 20.0f;
+
+		}
+
+		return y;
+
+	}
+
+	float manager::paint_pc_privacy ( render::gpu& gpu, const theme& colors, float x, float y, float inner, bool enabled, double now, bool launching ) {
+
+		static const wchar_t* const lan_labels [ 2 ] = { L"Allowed", L"Blocked" };
+		static const wchar_t* const route_labels [ 2 ] = { L"Direct", L"SOCKS5 proxy" };
+		static const wchar_t* const identity_labels [ 2 ] = { L"Keep the same", L"New every start" };
+		static const wchar_t* const disposable_labels [ 2 ] = { L"Keep them", L"Forget at shutdown" };
+		static const wchar_t* const preview_labels [ 2 ] = { L"Saved", L"Never saved" };
+		static const wchar_t* const internet_labels [ 2 ] = { L"Open", L"Ask first" };
+		float control_x = x + label_column;
+		float span = inner - label_column;
+		color label_tint = enabled ? colors.muted : colors.faint;
+		bool can_route = !launching || form.proxy.length > 0;
+
+		gpu.text ( L"Internet", render::FONT_BODY, rect { x, y, label_column, control_height }, label_tint, render::ALIGN_LEFT );
+		segmented ( gpu, colors, rect { control_x, y, span, control_height }, internet_labels, 2, form.ask_internet ? 1 : 0, ACTION_INTERNET, enabled );
+		y += control_height + 10.0f;
+		gpu.text ( L"Your network", render::FONT_BODY, rect { x, y, label_column, control_height }, label_tint, render::ALIGN_LEFT );
+		segmented ( gpu, colors, rect { control_x, y, span, control_height }, lan_labels, 2, form.local_network ? 0 : 1, ACTION_LAN, enabled );
+		y += control_height + 10.0f;
+		gpu.text ( L"Route", render::FONT_BODY, rect { x, y, label_column, control_height }, label_tint, render::ALIGN_LEFT );
+		segmented ( gpu, colors, rect { control_x, y, span, control_height }, route_labels, 2, form.use_proxy && can_route ? 1 : 0, ACTION_ROUTE, enabled && can_route );
+		y += control_height + 10.0f;
+
+		if ( !launching && form.use_proxy ) {
+
+			gpu.text ( L"Proxy", render::FONT_BODY, rect { x, y, label_column, control_height }, label_tint, render::ALIGN_LEFT );
+			field ( gpu, colors, rect { control_x, y, span, control_height }, now, 3, L"127.0.0.1:9050", false );
+			y += control_height + 10.0f;
+
+		}
+
+		gpu.text ( L"Hardware IDs", render::FONT_BODY, rect { x, y, label_column, control_height }, label_tint, render::ALIGN_LEFT );
+		segmented ( gpu, colors, rect { control_x, y, span, control_height }, identity_labels, 2, form.fresh_identity ? 1 : 0, ACTION_IDENTITY, enabled );
+		y += control_height + 10.0f;
+		gpu.text ( L"Disk changes", render::FONT_BODY, rect { x, y, label_column, control_height }, label_tint, render::ALIGN_LEFT );
+		segmented ( gpu, colors, rect { control_x, y, span, control_height }, disposable_labels, 2, form.disposable ? 1 : 0, ACTION_DISPOSABLE, enabled );
+		y += control_height + 10.0f;
+
+		if ( !launching ) {
+
+			gpu.text ( L"Screen preview", render::FONT_BODY, rect { x, y, label_column, control_height }, label_tint, render::ALIGN_LEFT );
+			segmented ( gpu, colors, rect { control_x, y, span, control_height }, preview_labels, 2, form.keep_preview ? 0 : 1, ACTION_PREVIEW, enabled );
+			y += control_height + 10.0f;
+
+		}
+
+		const wchar_t* notes [ 2 ] = {
+
+			form.use_proxy && can_route ? ( proxy_valid ( ) ? L"All traffic and names go through the proxy. Nothing else leaves." : L"Type the proxy as host:port, like 127.0.0.1:9050 for Tor." ) : ( form.ask_internet ? L"Each app asks in the machine's window before it can connect." : L"Blocking keeps the machine away from your PC and other devices." ),
+			form.disposable ? L"Writes go to an encrypted scratch file. The key stays in memory." : ( launching && !can_route ? L"Set a proxy under Settings, Privacy to route through it." : L"New IDs mean a fresh MAC address and system UUID on every start." ),
+
+		};
+
+		bool wrong = form.use_proxy && can_route && !proxy_valid ( );
+
+		y += 2.0f;
+
+		for ( int32_t i = 0; i < 2; i++ ) {
+
+			gpu.text ( notes [ i ], render::FONT_SMALL, rect { control_x, y, span, 18.0f }, wrong && i == 0 ? colors.danger : colors.faint, render::ALIGN_LEFT );
+			y += 20.0f;
+
+		}
+
+		return y;
+
+	}
+
 	float manager::paint_pc_storage ( render::gpu& gpu, const theme& colors, float x, float y, float inner, bool enabled, bool creating ) {
 
 		static const wchar_t* const disk_labels [ 3 ] = { L"New disk", L"Existing\x2026", L"None" };
@@ -1434,12 +1658,15 @@ namespace ui {
 
 		bool remove = shown == SHEET_REMOVE;
 		bool settings = shown == SHEET_SETTINGS;
+		bool launch = shown == SHEET_LAUNCH;
 		bool enabled = editing ( );
-		float sheet_width = remove ? 460.0f : ( settings ? 700.0f : 660.0f );
+		float sheet_width = remove ? 460.0f : ( settings ? 700.0f : ( launch ? 600.0f : 660.0f ) );
 		float content = 60.0f;
 		int32_t rows = ( state.preset_count + 2 ) / 3;
 
-		if ( shown == SHEET_NEW ) {
+		if ( launch )
+			content = 30.0f + 5.0f * 40.0f + 46.0f;
+		else if ( shown == SHEET_NEW ) {
 
 			content = 54.0f + static_cast < float > ( rows ) * 36.0f + 30.0f;
 
@@ -1455,7 +1682,7 @@ namespace ui {
 				content += 40.0f + 66.0f + 80.0f;
 
 		} else if ( settings )
-			content = 300.0f + ( subject_running ? 44.0f : 0.0f );
+			content = 340.0f + ( subject_running ? 44.0f : 0.0f );
 
 		float sheet_height = 56.0f + content + 12.0f + 56.0f;
 		rect card = { math::round ( ( width - sheet_width ) * 0.5f ), math::round ( base::max ( ( height - sheet_height ) * 0.5f, 12.0f ) + ( 1.0f - sheet_amount ) * 6.0f ), sheet_width, sheet_height };
@@ -1502,13 +1729,29 @@ namespace ui {
 
 		}
 
+		if ( launch ) {
+
+			base::writer title;
+
+			title.add ( L"Start \x201C" ).add ( subject ).add ( L"\x201D" );
+			gpu.text ( title.text ( ), render::FONT_TITLE, rect { x, card.y + 18.0f, inner, 24.0f }, colors.text, render::ALIGN_LEFT );
+			gpu.text ( L"These apply to this start only. Settings keep the machine's usual choices.", render::FONT_SMALL, rect { x, y, inner, 18.0f }, colors.muted, render::ALIGN_LEFT );
+			paint_pc_privacy ( gpu, colors, x, y + 30.0f, inner, true, now, true );
+			button ( gpu, colors, rect { card.right ( ) - 20.0f - 80.0f, buttons, 80.0f, control_height }, L"Start", ACTION_LAUNCH, 0, true );
+			button ( gpu, colors, rect { card.right ( ) - 20.0f - 80.0f - 8.0f - 80.0f, buttons, 80.0f, control_height }, L"Cancel", ACTION_CANCEL, 1, true );
+			gpu.opacity = 1.0f;
+
+			return;
+
+		}
+
 		gpu.text ( settings ? L"Machine settings" : L"New machine", render::FONT_TITLE, rect { x, card.y + 18.0f, inner, 24.0f }, colors.text, render::ALIGN_LEFT );
 
 		if ( settings ) {
 
-			static const wchar_t* const pages [ 4 ] = { L"General", L"System", L"Storage", L"Sharing" };
+			static const wchar_t* const pages [ 6 ] = { L"General", L"System", L"Storage", L"Sharing", L"Display", L"Privacy" };
 			float nav = 150.0f;
-			int32_t page_count = form.modern ? 4 : 3;
+			int32_t page_count = form.modern ? 6 : 3;
 
 			gpu.fill ( rect { card.x + nav, card.y + 56.0f, 1.0f, footer - card.y - 56.0f }, 0.0f, colors.divider );
 
@@ -1571,12 +1814,16 @@ namespace ui {
 
 			} else if ( category == 3 && form.modern )
 				paint_pc_sharing ( gpu, colors, x, y, inner, enabled );
+			else if ( category == 4 && form.modern )
+				paint_pc_display ( gpu, colors, x, y, inner, enabled );
+			else if ( category == 5 && form.modern )
+				paint_pc_privacy ( gpu, colors, x, y, inner, enabled, now, false );
 			else if ( form.modern )
 				paint_pc_storage ( gpu, colors, x, y, inner, enabled, false );
 			else
 				paint_xt_storage ( gpu, colors, x, y, inner, enabled );
 
-			button ( gpu, colors, rect { card.right ( ) - 20.0f - 80.0f, buttons, 80.0f, control_height }, L"Save", ACTION_SAVE, 0, enabled && name_valid ( ) );
+			button ( gpu, colors, rect { card.right ( ) - 20.0f - 80.0f, buttons, 80.0f, control_height }, L"Save", ACTION_SAVE, 0, enabled && name_valid ( ) && proxy_valid ( ) );
 			button ( gpu, colors, rect { card.right ( ) - 20.0f - 80.0f - 8.0f - 80.0f, buttons, 80.0f, control_height }, L"Cancel", ACTION_CANCEL, 1, true );
 			gpu.opacity = 1.0f;
 

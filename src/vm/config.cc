@@ -305,6 +305,121 @@ namespace vm {
 
 	}
 
+	const screen_size* screen_choices ( ) {
+
+		static const screen_size table [ screen_choice_count ] = {
+
+			{ 0, 0 }, { 1024, 768 }, { 1280, 720 }, { 1280, 800 },
+			{ 1366, 768 }, { 1600, 900 }, { 1920, 1080 }, { 2560, 1440 },
+
+		};
+
+		return table;
+
+	}
+
+	const uint16_t* frame_choices ( ) {
+
+		static const uint16_t table [ frame_choice_count ] = { 0, 30, 60, 90, 120, 144 };
+
+		return table;
+
+	}
+
+	bool valid_proxy ( const char* text, int32_t length ) {
+
+		int32_t colon = -1;
+
+		for ( int32_t i = 0; i < length; i++ ) {
+
+			if ( text [ i ] == ':' )
+				colon = i;
+
+		}
+
+		if ( colon < 1 || colon == length - 1 || length >= 128 )
+			return false;
+
+		for ( int32_t i = 0; i < colon; i++ ) {
+
+			char c = text [ i ];
+
+			if ( !( ( c >= 'a' && c <= 'z' ) || ( c >= 'A' && c <= 'Z' ) || ( c >= '0' && c <= '9' ) || c == '.' || c == '-' ) )
+				return false;
+
+		}
+
+		int64_t port = 0;
+
+		for ( int32_t i = colon + 1; i < length; i++ ) {
+
+			if ( text [ i ] < '0' || text [ i ] > '9' || length - colon > 6 )
+				return false;
+
+			port = port * 10 + ( text [ i ] - '0' );
+
+		}
+
+		return port >= 1 && port <= 65535;
+
+	}
+
+	bool read_launch ( const wchar_t* const* arguments, int32_t count, launch_choice& out ) {
+
+		bool any = false;
+
+		for ( int32_t i = 1; arguments && i + 1 < count; i++ ) {
+
+			const wchar_t* value = arguments [ i + 1 ];
+			int8_t yes = base::same_text ( value, L"1" ) || base::same_text ( value, L"fresh" ) || base::same_text ( value, L"proxy" ) || base::same_text ( value, L"ask" ) ? 1 : 0;
+
+			if ( base::same_text ( arguments [ i ], L"--disposable" ) )
+				out.disposable = yes;
+			else if ( base::same_text ( arguments [ i ], L"--identity" ) )
+				out.fresh_identity = yes;
+			else if ( base::same_text ( arguments [ i ], L"--local-network" ) )
+				out.local_network = yes;
+			else if ( base::same_text ( arguments [ i ], L"--route" ) )
+				out.use_proxy = yes;
+			else if ( base::same_text ( arguments [ i ], L"--internet" ) )
+				out.ask_internet = yes;
+			else
+				continue;
+
+			any = true;
+			i++;
+
+		}
+
+		return any;
+
+	}
+
+	void apply_launch ( const launch_choice& choice, config& run ) {
+
+		if ( choice.disposable >= 0 )
+			run.disposable = choice.disposable != 0;
+
+		if ( choice.fresh_identity >= 0 )
+			run.fresh_identity = choice.fresh_identity != 0;
+
+		if ( choice.local_network >= 0 )
+			run.local_network = choice.local_network != 0;
+
+		if ( choice.use_proxy >= 0 )
+			run.use_proxy = choice.use_proxy != 0 && run.proxy [ 0 ];
+
+		if ( choice.ask_internet >= 0 )
+			run.ask_internet = choice.ask_internet != 0;
+
+	}
+
+	bool private_run ( const config& run ) {
+
+		return run.disposable || run.fresh_identity || !run.local_network || ( run.use_proxy && run.proxy [ 0 ] ) || !run.keep_preview || run.ask_internet;
+
+	}
+
 	bool valid_name ( const wchar_t* name ) {
 
 		int32_t length = base::text_length ( name );
@@ -504,7 +619,110 @@ namespace vm {
 				else
 					ok = fail ( error, room, line_number, "sharing has to be off, to-machine, from-machine or both" );
 
-			} else if ( key ( "network" ) )
+			} else if ( key ( "screen" ) ) {
+
+				int32_t cross = 0;
+				int64_t across = 0;
+
+				while ( cross < value_size && value [ cross ] != 'x' )
+					cross++;
+
+				if ( same_key ( value, value_size, "auto" ) ) {
+
+					result->screen_width = 0;
+					result->screen_height = 0;
+
+				} else if ( cross >= value_size || !number ( value, cross, across ) || !number ( value + cross + 1, value_size - cross - 1, amount ) || across < 640 || across > 2560 || amount < 400 || amount > 1600 ) {
+
+					ok = fail ( error, room, line_number, "the screen has to be from 640x400 to 2560x1600" );
+
+				} else {
+
+					result->screen_width = static_cast < uint16_t > ( across );
+					result->screen_height = static_cast < uint16_t > ( amount );
+
+				}
+
+			} else if ( key ( "frame_rate" ) ) {
+
+				if ( same_key ( value, value_size, "display" ) )
+					result->frame_rate = 0;
+				else if ( !number ( value, value_size, amount ) || amount < 15 || amount > 360 )
+					ok = fail ( error, room, line_number, "the frame rate has to be display or 15 to 360" );
+				else
+					result->frame_rate = static_cast < uint16_t > ( amount );
+
+			} else if ( key ( "scaling" ) ) {
+
+				if ( same_key ( value, value_size, "fit" ) )
+					result->scaling = 0;
+				else if ( same_key ( value, value_size, "whole" ) )
+					result->scaling = 1;
+				else if ( same_key ( value, value_size, "actual" ) )
+					result->scaling = 2;
+				else
+					ok = fail ( error, room, line_number, "scaling has to be fit, whole or actual" );
+
+			} else if ( key ( "filter" ) ) {
+
+				if ( same_key ( value, value_size, "sharp" ) )
+					result->smooth = false;
+				else if ( same_key ( value, value_size, "smooth" ) )
+					result->smooth = true;
+				else
+					ok = fail ( error, room, line_number, "the filter has to be sharp or smooth" );
+
+			} else if ( key ( "identity" ) ) {
+
+				if ( same_key ( value, value_size, "stable" ) )
+					result->fresh_identity = false;
+				else if ( same_key ( value, value_size, "fresh" ) )
+					result->fresh_identity = true;
+				else
+					ok = fail ( error, room, line_number, "identity has to be stable or fresh" );
+
+			} else if ( key ( "proxy" ) ) {
+
+				if ( value_size && !valid_proxy ( value, value_size ) ) {
+
+					ok = fail ( error, room, line_number, "the proxy has to be host:port" );
+
+				} else {
+
+					for ( int32_t i = 0; i < value_size; i++ )
+						result->proxy [ i ] = value [ i ];
+
+					result->proxy [ value_size ] = 0;
+
+				}
+
+			} else if ( key ( "route" ) ) {
+
+				if ( same_key ( value, value_size, "direct" ) )
+					result->use_proxy = false;
+				else if ( same_key ( value, value_size, "proxy" ) )
+					result->use_proxy = true;
+				else
+					ok = fail ( error, room, line_number, "the route has to be direct or proxy" );
+
+			} else if ( key ( "internet" ) ) {
+
+				if ( same_key ( value, value_size, "open" ) )
+					result->ask_internet = false;
+				else if ( same_key ( value, value_size, "ask" ) )
+					result->ask_internet = true;
+				else
+					ok = fail ( error, room, line_number, "internet has to be open or ask" );
+
+			} else if ( key ( "frame_counter" ) )
+				ok = flag ( result->frame_counter );
+			else if ( key ( "local_network" ) )
+				ok = flag ( result->local_network );
+			else if ( key ( "disposable" ) )
+				ok = flag ( result->disposable );
+			else if ( key ( "preview" ) )
+				ok = flag ( result->keep_preview );
+			else if ( key ( "network" ) )
 				ok = flag ( result->network );
 			else if ( key ( "unattended" ) )
 				ok = flag ( result->unattended );
@@ -702,6 +920,54 @@ namespace vm {
 			put ( out, "file_sharing=" );
 			put ( out, shares [ in.file_sharing & 3 ] );
 			put_number ( out, "unattended", in.unattended );
+
+			char screen [ 24 ];
+			int32_t used = 0;
+
+			auto digits = [ & ] ( uint32_t value ) {
+
+				char reversed [ 8 ];
+				int32_t count = 0;
+
+				do {
+
+					reversed [ count++ ] = static_cast < char > ( '0' + value % 10 );
+					value /= 10;
+
+				} while ( value );
+
+				while ( count )
+					screen [ used++ ] = reversed [ --count ];
+
+			};
+
+			digits ( in.screen_width );
+			screen [ used++ ] = 'x';
+			digits ( in.screen_height );
+			screen [ used ] = 0;
+			put ( out, "screen=" );
+			put ( out, in.screen_width ? screen : "auto" );
+			out.push ( '\n' );
+
+			if ( in.frame_rate )
+				put_number ( out, "frame_rate", in.frame_rate );
+			else
+				put ( out, "frame_rate=display\n" );
+
+			static const char* const scalings [ 3 ] = { "scaling=fit\n", "scaling=whole\n", "scaling=actual\n" };
+
+			put ( out, scalings [ in.scaling < 3 ? in.scaling : 0 ] );
+			put ( out, in.smooth ? "filter=smooth\n" : "filter=sharp\n" );
+			put_number ( out, "frame_counter", in.frame_counter );
+			put_number ( out, "local_network", in.local_network );
+			put ( out, "proxy=" );
+			put ( out, in.proxy );
+			out.push ( '\n' );
+			put ( out, in.use_proxy ? "route=proxy\n" : "route=direct\n" );
+			put ( out, in.ask_internet ? "internet=ask\n" : "internet=open\n" );
+			put ( out, in.fresh_identity ? "identity=fresh\n" : "identity=stable\n" );
+			put_number ( out, "disposable", in.disposable );
+			put_number ( out, "preview", in.keep_preview );
 			put_text ( out, "iso", in.iso, false );
 			put_text ( out, "disk", in.disk, false );
 

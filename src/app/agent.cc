@@ -93,8 +93,46 @@ namespace app {
 
 		CreateDirectoryW ( folder, nullptr );
 
-		HANDLE running = OpenMutexW ( SYNCHRONIZE, FALSE, L"Local\\coldboot_tools_agent" );
-		bool copied = base::same_text ( self, program ) || CopyFileW ( self, program, FALSE ) || running;
+		bool same = base::same_text ( self, program );
+		HWND older = same ? nullptr : FindWindowExW ( HWND_MESSAGE, nullptr, L"coldboot_tools", nullptr );
+
+		if ( older ) {
+
+			DWORD owner = 0;
+
+			GetWindowThreadProcessId ( older, &owner );
+
+			HANDLE process = owner ? OpenProcess ( SYNCHRONIZE, FALSE, owner ) : nullptr;
+
+			PostMessageW ( older, WM_CLOSE, 0, 0 );
+
+			if ( process ) {
+
+				WaitForSingleObject ( process, 15000 );
+				CloseHandle ( process );
+
+			}
+
+		}
+
+		bool copied = same;
+
+		for ( int32_t attempt = 0; !copied && attempt < 50; attempt++ ) {
+
+			SetFileAttributesW ( program, FILE_ATTRIBUTE_NORMAL );
+			copied = CopyFileW ( self, program, FALSE ) != 0;
+
+			if ( !copied )
+				Sleep ( 100 );
+
+		}
+
+		if ( copied && !same )
+			SetFileAttributesW ( program, FILE_ATTRIBUTE_NORMAL );
+
+		HANDLE running = copied ? nullptr : OpenMutexW ( SYNCHRONIZE, FALSE, L"Local\\coldboot_tools_agent" );
+
+		copied = copied || running;
 
 		if ( running )
 			CloseHandle ( running );
@@ -401,7 +439,7 @@ namespace app {
 		InterlockedExchange ( &agent_quit, 1 );
 
 		if ( network )
-			WaitForSingleObject ( network, 5000 );
+			WaitForSingleObject ( network, 2000 );
 
 		CloseHandle ( single );
 

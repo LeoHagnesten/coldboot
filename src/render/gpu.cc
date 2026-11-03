@@ -2,7 +2,7 @@
 #include "base/png.hh"
 #include <windows.h>
 #include <d3d11.h>
-#include <dxgi1_2.h>
+#include <dxgi1_3.h>
 #include <d2d1_1.h>
 #include <dwrite.h>
 #include "screen_vs.h"
@@ -69,10 +69,22 @@ namespace render {
 			description.Scaling = DXGI_SCALING_STRETCH;
 			description.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
 			description.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
+			chain_flags = paced ? DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT : 0u;
+			description.Flags = chain_flags;
 			ok = ok && SUCCEEDED ( dxgi_factory->CreateSwapChainForHwnd ( device, window, &description, nullptr, nullptr, &chain ) );
 
 			if ( ok )
 				dxgi_factory->MakeWindowAssociation ( window, DXGI_MWA_NO_ALT_ENTER );
+
+			IDXGISwapChain2* latency = nullptr;
+
+			if ( ok && paced && SUCCEEDED ( chain->QueryInterface ( __uuidof ( IDXGISwapChain2 ), reinterpret_cast < void** > ( &latency ) ) ) ) {
+
+				latency->SetMaximumFrameLatency ( 1 );
+				waiter = latency->GetFrameLatencyWaitableObject ( );
+				latency->Release ( );
+
+			}
 
 		}
 
@@ -161,6 +173,13 @@ namespace render {
 		drop ( picture_view );
 		drop ( picture );
 		drop ( chain );
+
+		if ( waiter )
+			CloseHandle ( waiter );
+
+		waiter = nullptr;
+		uploaded_width = 0;
+		uploaded_height = 0;
 		drop ( context );
 		drop ( device );
 
@@ -247,7 +266,7 @@ namespace render {
 		width = pixel_width;
 		height = pixel_height;
 
-		if ( chain && FAILED ( chain->ResizeBuffers ( 0, static_cast < UINT > ( width ), static_cast < UINT > ( height ), DXGI_FORMAT_UNKNOWN, 0 ) ) )
+		if ( chain && FAILED ( chain->ResizeBuffers ( 0, static_cast < UINT > ( width ), static_cast < UINT > ( height ), DXGI_FORMAT_UNKNOWN, chain_flags ) ) )
 			return false;
 
 		return make_targets ( );
@@ -346,7 +365,7 @@ namespace render {
 
 	}
 
-	void gpu::screen ( const uint32_t* pixels, int32_t frame_width, int32_t frame_height, rect area, bool crt ) {
+	void gpu::screen ( const uint32_t* pixels, int32_t frame_width, int32_t frame_height, rect area, bool crt, bool smooth, bool fresh ) {
 
 		if ( !pixels || frame_width <= 0 || frame_height <= 0 || area.w < 1.0f || area.h < 1.0f )
 			return;
@@ -362,8 +381,12 @@ namespace render {
 		frame_height = base::min ( frame_height, texture_height );
 
 		D3D11_MAPPED_SUBRESOURCE mapped;
+		bool upload = fresh || frame_width != uploaded_width || frame_height != uploaded_height;
 
-		if ( SUCCEEDED ( context->Map ( picture, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped ) ) ) {
+		uploaded_width = frame_width;
+		uploaded_height = frame_height;
+
+		if ( upload && SUCCEEDED ( context->Map ( picture, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped ) ) ) {
 
 			for ( int32_t y = 0; y < frame_height; y++ ) {
 
@@ -381,7 +404,7 @@ namespace render {
 
 		float scale = dpi / 96.0f;
 		D3D11_VIEWPORT view = { area.x * scale, area.y * scale, area.w * scale, area.h * scale, 0.0f, 1.0f };
-		float values [ 8 ] = { static_cast < float > ( frame_width ), static_cast < float > ( frame_height ), 1.0f / texture_width, 1.0f / texture_height, view.Width, view.Height, crt ? 1.0f : 0.0f, 0.0f };
+		float values [ 8 ] = { static_cast < float > ( frame_width ), static_cast < float > ( frame_height ), 1.0f / texture_width, 1.0f / texture_height, view.Width, view.Height, crt ? 1.0f : 0.0f, smooth ? 1.0f : 0.0f };
 
 		if ( SUCCEEDED ( context->Map ( constants, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped ) ) ) {
 
@@ -428,7 +451,7 @@ namespace render {
 		finish ( );
 
 		if ( chain )
-			chain->Present ( 1, 0 );
+			chain->Present ( synced ? 1 : 0, 0 );
 
 	}
 

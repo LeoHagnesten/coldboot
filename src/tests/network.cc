@@ -485,6 +485,352 @@ namespace tests {
 
 	}
 
+	static uint32_t guest_udp ( uint8_t* frame, uint16_t source_port, uint32_t target, uint16_t target_port, const uint8_t* data, uint32_t size ) {
+
+		uint8_t body [ 600 ] = { };
+
+		set16 ( body, source_port );
+		set16 ( body + 2, target_port );
+		set16 ( body + 4, 8 + size );
+
+		for ( uint32_t i = 0; i < size; i++ )
+			body [ 8 + i ] = data [ i ];
+
+		return guest_packet ( frame, 17, net::nat::guest_address, target, body, 8 + size );
+
+	}
+
+	static uint32_t dns_query ( uint8_t* out, uint16_t id, const char* name ) {
+
+		uint32_t at = 12;
+
+		for ( int32_t i = 0; i < 12; i++ )
+			out [ i ] = 0;
+
+		set16 ( out, id );
+		set16 ( out + 2, 0x0100 );
+		set16 ( out + 4, 1 );
+
+		for ( const char* part = name; *part; ) {
+
+			uint32_t length = 0;
+
+			while ( part [ length ] && part [ length ] != '.' )
+				length++;
+
+			out [ at++ ] = static_cast < uint8_t > ( length );
+
+			for ( uint32_t i = 0; i < length; i++ )
+				out [ at++ ] = static_cast < uint8_t > ( part [ i ] );
+
+			part += length;
+
+			if ( *part == '.' )
+				part++;
+
+		}
+
+		out [ at++ ] = 0;
+		set16 ( out + at, 1 );
+		set16 ( out + at + 2, 1 );
+
+		return at + 4;
+
+	}
+
+	struct fake_socks {
+
+		SOCKET listener = INVALID_SOCKET;
+		char name [ 64 ] = { };
+		uint16_t port = 0;
+		char heard [ 16 ] = { };
+		volatile long done = 0;
+
+	};
+
+	static DWORD __stdcall serve_socks ( void* context ) {
+
+		fake_socks* server = static_cast < fake_socks* > ( context );
+		fd_set ready;
+		timeval patience = { 5, 0 };
+
+		FD_ZERO ( &ready );
+		FD_SET ( server->listener, &ready );
+
+		SOCKET peer = select ( 0, &ready, nullptr, nullptr, &patience ) == 1 ? accept ( server->listener, nullptr, nullptr ) : INVALID_SOCKET;
+
+		if ( peer != INVALID_SOCKET ) {
+
+			DWORD timeout = 3000;
+			uint8_t buffer [ 300 ] = { };
+			auto take = [ & ] ( uint32_t count ) {
+
+				uint32_t got = 0;
+
+				while ( got < count ) {
+
+					int part = recv ( peer, reinterpret_cast < char* > ( buffer + got ), static_cast < int > ( count - got ), 0 );
+
+					if ( part <= 0 )
+						return false;
+
+					got += static_cast < uint32_t > ( part );
+
+				}
+
+				return true;
+
+			};
+
+			setsockopt ( peer, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast < const char* > ( &timeout ), sizeof ( timeout ) );
+
+			if ( take ( 3 ) && buffer [ 0 ] == 5 && buffer [ 2 ] == 0 ) {
+
+				::send ( peer, "\x05\x00", 2, 0 );
+
+				if ( take ( 5 ) && buffer [ 0 ] == 5 && buffer [ 1 ] == 1 && buffer [ 3 ] == 3 ) {
+
+					uint32_t length = buffer [ 4 ];
+
+					if ( length < 63 && take ( length + 2 ) ) {
+
+						for ( uint32_t i = 0; i < length; i++ )
+							server->name [ i ] = static_cast < char > ( buffer [ i ] );
+
+						server->port = get16 ( buffer + length );
+						::send ( peer, "\x05\x00\x00\x01\x00\x00\x00\x00\x00\x00", 10, 0 );
+
+						int got = recv ( peer, server->heard, 5, 0 );
+
+						if ( got == 5 )
+							::send ( peer, "world", 5, 0 );
+
+						Sleep ( 300 );
+
+					}
+
+				}
+
+			}
+
+			closesocket ( peer );
+
+		}
+
+		InterlockedExchange ( &server->done, 1 );
+
+		return 0;
+
+	}
+
+	static void privacy_tests ( ) {
+
+		frame_catcher* catcher = new frame_catcher ( );
+		net::nat* router = new net::nat ( );
+		uint8_t frame [ 1600 ];
+		WSADATA data;
+
+		WSAStartup ( MAKEWORD ( 2, 2 ), &data );
+		router->local_network = false;
+
+		if ( !router->start ( catcher ) ) {
+
+			expect ( false, "network: the private NAT starts" );
+			delete router;
+			delete catcher;
+
+			return;
+
+		}
+
+		router->send ( frame, guest_tcp ( frame, 40100, net::nat::gateway_address, 445, 500, 0, 0x02, nullptr ) );
+		router->send ( frame, guest_tcp ( frame, 40101, 0xC0A80001u, 80, 600, 0, 0x02, nullptr ) );
+
+		bool refused = catcher->wait ( 2, 2000 ) && ( catcher->frames [ 0 ] [ 47 ] & 0x04 ) && ( catcher->frames [ 1 ] [ 47 ] & 0x04 ) && router->blocked >= 2;
+
+		expect ( refused, "network: with the local network blocked, the guest can't reach your PC or your LAN" );
+		router->stop ( );
+		delete router;
+
+		SOCKET gatekeeper = socket ( AF_INET, SOCK_STREAM, IPPROTO_TCP );
+		sockaddr_in gate_place = { };
+		int gate_length = sizeof ( gate_place );
+
+		gate_place.sin_family = AF_INET;
+		gate_place.sin_addr.s_addr = htonl ( 0x7F000001 );
+		bind ( gatekeeper, reinterpret_cast < sockaddr* > ( &gate_place ), sizeof ( gate_place ) );
+		listen ( gatekeeper, 2 );
+		getsockname ( gatekeeper, reinterpret_cast < sockaddr* > ( &gate_place ), &gate_length );
+
+		uint16_t gate_port = ntohs ( gate_place.sin_port );
+		net::nat::access_request asked;
+
+		router = new net::nat ( );
+		router->ask_first = true;
+		catcher->count = 0;
+		router->start ( catcher );
+		router->send ( frame, guest_tcp ( frame, 40300, net::nat::gateway_address, gate_port, 700, 0, 0x02, nullptr ) );
+		Sleep ( 150 );
+
+		bool held = catcher->count == 0;
+		bool listed = router->next_request ( asked ) && asked.protocol == 6 && asked.guest_port == 40300 && asked.remote_port == gate_port;
+
+		router->send ( frame, guest_tcp ( frame, 40300, net::nat::gateway_address, gate_port, 700, 0, 0x02, nullptr ) );
+		Sleep ( 100 );
+		held = held && catcher->count == 0;
+		router->decide ( asked.id, true );
+
+		bool opened = catcher->wait ( 1, 2000 ) && catcher->frames [ 0 ] [ 47 ] == 0x12 && get_be32 ( catcher->frames [ 0 ] + 42 ) == 701;
+		uint32_t gate_theirs = opened ? get_be32 ( catcher->frames [ 0 ] + 38 ) + 1 : 0;
+		fd_set gate_ready;
+		timeval gate_patience = { 2, 0 };
+
+		FD_ZERO ( &gate_ready );
+		FD_SET ( gatekeeper, &gate_ready );
+
+		SOCKET gate_peer = select ( 0, &gate_ready, nullptr, nullptr, &gate_patience ) == 1 ? accept ( gatekeeper, nullptr, nullptr ) : INVALID_SOCKET;
+		char gate_heard [ 8 ] = { };
+
+		router->send ( frame, guest_tcp ( frame, 40300, net::nat::gateway_address, gate_port, 701, gate_theirs, 0x18, "hello" ) );
+
+		if ( gate_peer != INVALID_SOCKET ) {
+
+			DWORD timeout = 2000;
+
+			setsockopt ( gate_peer, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast < const char* > ( &timeout ), sizeof ( timeout ) );
+			opened = opened && recv ( gate_peer, gate_heard, 5, 0 ) == 5 && gate_heard [ 0 ] == 'h';
+			closesocket ( gate_peer );
+
+		} else
+			opened = false;
+
+		catcher->count = 0;
+		router->send ( frame, guest_tcp ( frame, 40301, net::nat::gateway_address, gate_port, 800, 0, 0x02, nullptr ) );
+		Sleep ( 100 );
+
+		bool second = router->next_request ( asked ) && asked.guest_port == 40301;
+
+		router->decide ( asked.id, false );
+
+		bool shut_out = false;
+
+		for ( uint32_t waited = 0; !shut_out && waited < 2000; waited += 10 ) {
+
+			Sleep ( 10 );
+
+			for ( long i = 0; i < catcher->count && !shut_out; i++ )
+				shut_out = catcher->frames [ i ] [ 23 ] == 6 && get16 ( catcher->frames [ i ] + 36 ) == 40301 && ( catcher->frames [ i ] [ 47 ] & 0x04 );
+
+		}
+
+		expect ( held && listed && opened && second && shut_out, "network: with Ask first, a new connection waits for an answer, then opens or is refused" );
+		router->stop ( );
+		delete router;
+		closesocket ( gatekeeper );
+
+		fake_socks* server = new fake_socks ( );
+		sockaddr_in place = { };
+		int place_length = sizeof ( place );
+
+		server->listener = socket ( AF_INET, SOCK_STREAM, IPPROTO_TCP );
+		place.sin_family = AF_INET;
+		place.sin_addr.s_addr = htonl ( 0x7F000001 );
+		bind ( server->listener, reinterpret_cast < sockaddr* > ( &place ), sizeof ( place ) );
+		listen ( server->listener, 1 );
+		getsockname ( server->listener, reinterpret_cast < sockaddr* > ( &place ), &place_length );
+
+		HANDLE thread = CreateThread ( nullptr, 0, &serve_socks, server, 0, nullptr );
+
+		router = new net::nat ( );
+
+		base::writer address;
+		char narrow [ 64 ] = { };
+
+		address.add ( L"127.0.0.1:" ).number ( ntohs ( place.sin_port ) );
+
+		for ( int32_t i = 0; address.text ( ) [ i ] && i < 63; i++ )
+			narrow [ i ] = static_cast < char > ( address.text ( ) [ i ] );
+
+		for ( int32_t i = 0; narrow [ i ]; i++ )
+			router->proxy [ i ] = narrow [ i ];
+
+		catcher->count = 0;
+
+		bool started = router->start ( catcher );
+		uint8_t query [ 128 ];
+		uint32_t query_size = dns_query ( query, 0xBEEF, "Example.com" );
+
+		router->send ( frame, guest_udp ( frame, 50000, net::nat::resolver_address, 53, query, query_size ) );
+
+		const uint8_t* reply = started && catcher->wait ( 1, 2000 ) ? catcher->frames [ 0 ] : nullptr;
+		uint32_t dns_size = reply ? get16 ( reply + 38 ) - 8u : 0;
+		uint32_t answer = reply && dns_size >= 16 ? get_be32 ( reply + 42 + dns_size - 4 ) : 0;
+		bool resolved = reply && get16 ( reply + 42 ) == 0xBEEF && get16 ( reply + 42 + 6 ) == 1 && ( answer & 0xFFFE0000u ) == net::nat::synthetic_base;
+
+		query_size = dns_query ( query, 0xCAFE, "wpad" );
+		router->send ( frame, guest_udp ( frame, 50001, net::nat::resolver_address, 53, query, query_size ) );
+
+		const uint8_t* hidden = catcher->wait ( 2, 2000 ) ? catcher->frames [ 1 ] : nullptr;
+		bool kept_local = hidden && get16 ( hidden + 42 ) == 0xCAFE && ( hidden [ 42 + 3 ] & 15 ) == 3;
+		long blocked_before = router->blocked;
+
+		router->send ( frame, guest_udp ( frame, 50002, 0x08080808u, 53, query, query_size ) );
+		Sleep ( 100 );
+
+		bool leak_stopped = router->blocked > blocked_before && catcher->count == 2;
+
+		expect ( resolved && kept_local && leak_stopped, "network: through a proxy, names get placeholder addresses, local names stay local and stray UDP is dropped" );
+
+		catcher->count = 0;
+		router->send ( frame, guest_tcp ( frame, 40200, answer, 443, 900, 0, 0x02, nullptr ) );
+
+		const uint8_t* accepted = nullptr;
+
+		for ( uint32_t waited = 0; !accepted && waited < 3000; waited += 10 ) {
+
+			Sleep ( 10 );
+
+			for ( long i = 0; i < catcher->count && !accepted; i++ ) {
+
+				if ( catcher->frames [ i ] [ 23 ] == 6 && catcher->frames [ i ] [ 47 ] == 0x12 )
+					accepted = catcher->frames [ i ];
+
+			}
+
+		}
+
+		uint32_t theirs = accepted ? get_be32 ( accepted + 38 ) + 1 : 0;
+
+		if ( accepted )
+			router->send ( frame, guest_tcp ( frame, 40200, answer, 443, 901, theirs, 0x18, "hello" ) );
+
+		bool replied = false;
+
+		for ( uint32_t waited = 0; accepted && !replied && waited < 3000; waited += 10 ) {
+
+			Sleep ( 10 );
+
+			for ( long i = 0; i < catcher->count && !replied; i++ )
+				replied = catcher->sizes [ i ] >= 59 && catcher->frames [ i ] [ 23 ] == 6 && catcher->frames [ i ] [ 54 ] == 'w' && catcher->frames [ i ] [ 58 ] == 'd';
+
+		}
+
+		WaitForSingleObject ( thread, 6000 );
+		CloseHandle ( thread );
+
+		bool named = base::same_text ( server->name, "example.com" ) && server->port == 443 && server->heard [ 0 ] == 'h' && server->heard [ 4 ] == 'o';
+
+		expect ( accepted && replied && named && router->proxied == 1, "network: a guest connection goes through the SOCKS5 proxy by name, so DNS never leaves the proxy" );
+
+		closesocket ( server->listener );
+		router->stop ( );
+		delete router;
+		delete server;
+		delete catcher;
+		WSACleanup ( );
+
+	}
+
 	static void pump_tools ( pc::guest_tools& host, pc::guest_tools& guest ) {
 
 		uint8_t* buffer = static_cast < uint8_t* > ( runtime_allocate ( 0x10000 ) );
@@ -624,6 +970,7 @@ namespace tests {
 		print ( "\r\n" );
 		nic_tests ( );
 		nat_tests ( );
+		privacy_tests ( );
 		tools_tests ( );
 
 	}

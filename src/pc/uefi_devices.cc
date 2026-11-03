@@ -6,28 +6,6 @@ namespace pc {
 
 	using namespace efi;
 
-	struct graphics_choice {
-
-		uint32_t width;
-		uint32_t height;
-		uint16_t number;
-
-	};
-
-	static const graphics_choice graphics_modes [ ] = {
-
-		{ 1024, 768, 0x118 },
-		{ 800, 600, 0x115 },
-		{ 640, 480, 0x112 },
-		{ 1280, 720, 0x140 },
-		{ 1280, 1024, 0x11B },
-		{ 1600, 900, 0x144 },
-		{ 1920, 1080, 0x147 },
-
-	};
-
-	static constexpr uint32_t graphics_count = sizeof ( graphics_modes ) / sizeof ( graphics_modes [ 0 ] );
-
 	static const uint32_t text_palette [ 16 ] = {
 
 		0x000000, 0x0000AA, 0x00AA00, 0x00AAAA, 0xAA0000, 0xAA00AA, 0xAA5500, 0xAAAAAA,
@@ -181,6 +159,42 @@ namespace pc {
 
 	void uefi::build_graphics ( ) {
 
+		vga& video = *link.video;
+
+		graphics_count = 0;
+
+		auto add = [ & ] ( const vbe_mode& mode ) {
+
+			for ( uint32_t i = 0; i < graphics_count; i++ ) {
+
+				if ( graphics_numbers [ i ] == mode.number )
+					return;
+
+			}
+
+			if ( mode.bits == 32 && graphics_count < max_graphics && static_cast < uint64_t > ( mode.width ) * mode.height * 4 <= vga::vram_size )
+				graphics_numbers [ graphics_count++ ] = mode.number;
+
+		};
+
+		for ( int32_t i = 0; i < vga::mode_count; i++ ) {
+
+			if ( vga::modes [ i ].width == video.preferred_width && vga::modes [ i ].height == video.preferred_height )
+				add ( vga::modes [ i ] );
+
+		}
+
+		for ( int32_t pass = 0; pass < 2; pass++ ) {
+
+			for ( int32_t i = 0; i < vga::mode_count; i++ ) {
+
+				if ( ( vga::modes [ i ].number == 0x118 ) == ( pass == 0 ) )
+					add ( vga::modes [ i ] );
+
+			}
+
+		}
+
 		graphics_info = heap ( 36 );
 		graphics_mode = heap ( 40 );
 		graphics = heap ( 32 );
@@ -205,7 +219,7 @@ namespace pc {
 
 		vm->lock_devices ( );
 
-		bool ok = video.set_vbe ( graphics_modes [ mode ].number );
+		bool ok = video.set_vbe ( graphics_numbers [ mode ] );
 
 		vm->unlock_devices ( );
 
@@ -1145,7 +1159,8 @@ namespace pc {
 				if ( mode >= graphics_count || !size_at || !info_at )
 					return INVALID_PARAMETER;
 
-				uint32_t info [ 9 ] = { 0, graphics_modes [ mode ].width, graphics_modes [ mode ].height, 1, 0, 0, 0, 0, graphics_modes [ mode ].width };
+				const vbe_mode* chosen = vga::find_mode ( graphics_numbers [ mode ] );
+				uint32_t info [ 9 ] = { 0, chosen ? chosen->width : 1024u, chosen ? chosen->height : 768u, 1, 0, 0, 0, 0, chosen ? chosen->width : 1024u };
 				uint64_t buffer = pool ( MEMORY_BOOT_DATA, 36 );
 
 				put ( cpu, buffer, info, 36 );
@@ -1304,7 +1319,7 @@ namespace pc {
 
 	void uefi::save_variables ( ) {
 
-		if ( !link.variables )
+		if ( !link.variables || !link.keep_variables )
 			return;
 
 		base::list < char > out;

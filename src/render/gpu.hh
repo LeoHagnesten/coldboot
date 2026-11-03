@@ -160,11 +160,20 @@ namespace render {
 
 		bool begin ( color background );
 
-		void screen ( const uint32_t* pixels, int32_t frame_width, int32_t frame_height, rect area, bool crt );
+		void screen ( const uint32_t* pixels, int32_t frame_width, int32_t frame_height, rect area, bool crt, bool smooth = false, bool fresh = true );
 
 		void finish ( );
 
 		void end ( );
+
+		void* frame_waiter ( ) const {
+
+			return waiter;
+
+		}
+
+		bool paced = false;
+		bool synced = true;
 
 		bool save ( const wchar_t* path );
 
@@ -235,6 +244,10 @@ namespace render {
 		IDWriteFactory* writer = nullptr;
 		IDWriteTextFormat* formats [ FONT_COUNT ] = { };
 		bool drawing = false;
+		void* waiter = nullptr;
+		unsigned int chain_flags = 0;
+		int32_t uploaded_width = 0;
+		int32_t uploaded_height = 0;
 
 	};
 

@@ -1,4 +1,6 @@
 #include "pc/tools.hh"
+#include <iphlpapi.h>
+#include <tlhelp32.h>
 
 namespace pc {
 
@@ -452,6 +454,9 @@ namespace pc {
 				linked = true;
 				frame ( TOOLS_POLICY, &policy, 4 );
 
+				if ( display [ 0 ] && display [ 1 ] )
+					frame ( TOOLS_DISPLAY, display, 8 );
+
 				tools_event item;
 
 				item.kind = TOOLS_CONNECTED;
@@ -643,10 +648,248 @@ namespace pc {
 				finish_receive ( true );
 				return;
 
+			case TOOLS_DISPLAY: {
+
+				if ( !agent || size < 8 )
+					return;
+
+				DEVMODEW mode = { };
+				DEVMODEW current = { };
+				uint32_t across = le32 ( data );
+				uint32_t down = le32 ( data + 4 );
+				bool offered = false;
+
+				mode.dmSize = sizeof ( mode );
+				current.dmSize = sizeof ( current );
+
+				for ( DWORD i = 0; !offered && EnumDisplaySettingsW ( nullptr, i, &mode ); i++ )
+					offered = mode.dmPelsWidth == across && mode.dmPelsHeight == down && mode.dmBitsPerPel >= 24;
+
+				if ( offered && EnumDisplaySettingsW ( nullptr, ENUM_CURRENT_SETTINGS, &current ) && ( current.dmPelsWidth != across || current.dmPelsHeight != down ) ) {
+
+					current.dmPelsWidth = across;
+					current.dmPelsHeight = down;
+					current.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT;
+					ChangeDisplaySettingsExW ( nullptr, &current, nullptr, CDS_UPDATEREGISTRY, nullptr );
+
+				}
+
+				return;
+
+			}
+
+			case TOOLS_WHO: {
+
+				if ( !agent || size < 12 )
+					return;
+
+				uint8_t reply [ 4 + 128 ] = { };
+				wchar_t name [ 64 ] = { };
+				uint32_t length = 0;
+
+				tools_port_owner ( le32 ( data + 4 ), static_cast < uint16_t > ( le32 ( data + 8 ) ), name, 64 );
+
+				for ( int32_t i = 0; i < 4; i++ )
+					reply [ i ] = data [ i ];
+
+				for ( ; name [ length ] && length < 63; length++ ) {
+
+					reply [ 4 + length * 2 ] = static_cast < uint8_t > ( name [ length ] );
+					reply [ 5 + length * 2 ] = static_cast < uint8_t > ( name [ length ] >> 8 );
+
+				}
+
+				frame ( TOOLS_OWNER, reply, 4 + length * 2 );
+
+				return;
+
+			}
+
+			case TOOLS_OWNER: {
+
+				if ( agent || size < 4 )
+					return;
+
+				tools_event item;
+
+				item.kind = TOOLS_OWNER_FOUND;
+				item.count = le32 ( data );
+				item.text.resize ( ( size - 4 ) / 2 + 1 );
+
+				for ( uint32_t i = 0; i < ( size - 4 ) / 2; i++ )
+					item.text [ i ] = static_cast < wchar_t > ( data [ 4 + i * 2 ] | data [ 5 + i * 2 ] << 8 );
+
+				item.text [ ( size - 4 ) / 2 ] = 0;
+				push_event ( base::move ( item ) );
+
+				return;
+
+			}
+
 			default:
 				return;
 
 		}
+
+	}
+
+	void tools_port_owner ( uint32_t protocol, uint16_t port, wchar_t* out, uint32_t room ) {
+
+		static constexpr ULONG ipv4 = 2;
+
+		out [ 0 ] = 0;
+
+		ULONG size = 0;
+		DWORD owner = 0;
+		bool found = false;
+		uint16_t wanted = static_cast < uint16_t > ( port >> 8 | port << 8 );
+
+		for ( int32_t attempt = 0; attempt < 3 && !found; attempt++ ) {
+
+			size = 0;
+
+			if ( protocol == 6 )
+				GetExtendedTcpTable ( nullptr, &size, FALSE, ipv4, TCP_TABLE_OWNER_PID_ALL, 0 );
+			else
+				GetExtendedUdpTable ( nullptr, &size, FALSE, ipv4, UDP_TABLE_OWNER_PID, 0 );
+
+			if ( !size )
+				break;
+
+			size += 4096;
+
+			uint8_t* table = static_cast < uint8_t* > ( runtime_allocate ( size ) );
+			DWORD result = protocol == 6 ? GetExtendedTcpTable ( table, &size, FALSE, ipv4, TCP_TABLE_OWNER_PID_ALL, 0 ) : GetExtendedUdpTable ( table, &size, FALSE, ipv4, UDP_TABLE_OWNER_PID, 0 );
+
+			if ( result == NO_ERROR && protocol == 6 ) {
+
+				const MIB_TCPTABLE_OWNER_PID* rows = reinterpret_cast < const MIB_TCPTABLE_OWNER_PID* > ( table );
+
+				for ( DWORD i = 0; i < rows->dwNumEntries && !found; i++ ) {
+
+					if ( static_cast < uint16_t > ( rows->table [ i ].dwLocalPort ) == wanted ) {
+
+						owner = rows->table [ i ].dwOwningPid;
+						found = true;
+
+					}
+
+				}
+
+			} else if ( result == NO_ERROR ) {
+
+				const MIB_UDPTABLE_OWNER_PID* rows = reinterpret_cast < const MIB_UDPTABLE_OWNER_PID* > ( table );
+
+				for ( DWORD i = 0; i < rows->dwNumEntries && !found; i++ ) {
+
+					if ( static_cast < uint16_t > ( rows->table [ i ].dwLocalPort ) == wanted ) {
+
+						owner = rows->table [ i ].dwOwningPid;
+						found = true;
+
+					}
+
+				}
+
+			}
+
+			runtime_release ( table );
+
+			if ( !found )
+				Sleep ( 20 );
+
+		}
+
+		if ( !found )
+			return;
+
+		wchar_t path [ MAX_PATH ] = { };
+		DWORD length = MAX_PATH;
+		HANDLE process = owner > 4 ? OpenProcess ( PROCESS_QUERY_LIMITED_INFORMATION, FALSE, owner ) : nullptr;
+		bool named = process && QueryFullProcessImageNameW ( process, 0, path, &length );
+
+		if ( process )
+			CloseHandle ( process );
+
+		if ( !named && owner > 4 ) {
+
+			HANDLE snapshot = CreateToolhelp32Snapshot ( TH32CS_SNAPPROCESS, 0 );
+			PROCESSENTRY32W entry = { };
+
+			entry.dwSize = sizeof ( entry );
+
+			for ( BOOL more = snapshot != INVALID_HANDLE_VALUE && Process32FirstW ( snapshot, &entry ); more && !named; more = Process32NextW ( snapshot, &entry ) ) {
+
+				if ( entry.th32ProcessID != owner )
+					continue;
+
+				for ( int32_t i = 0; i < MAX_PATH - 1 && entry.szExeFile [ i ]; i++ ) {
+
+					path [ i ] = entry.szExeFile [ i ];
+					path [ i + 1 ] = 0;
+
+				}
+
+				named = path [ 0 ] != 0;
+
+			}
+
+			if ( snapshot != INVALID_HANDLE_VALUE )
+				CloseHandle ( snapshot );
+
+		}
+
+		const wchar_t* leaf = owner <= 4 || !named ? ( owner <= 4 ? L"System" : L"" ) : path;
+
+		for ( const wchar_t* at = path; named && *at; at++ ) {
+
+			if ( *at == L'\\' )
+				leaf = at + 1;
+
+		}
+
+		uint32_t used = 0;
+
+		for ( ; leaf [ used ] && used + 1 < room; used++ )
+			out [ used ] = leaf [ used ];
+
+		out [ used ] = 0;
+
+	}
+
+	bool guest_tools::ask_owner ( uint32_t id, uint32_t protocol, uint16_t port ) {
+
+		uint32_t question [ 3 ] = { id, protocol, port };
+
+		AcquireSRWLockExclusive ( &lock );
+
+		bool sent = linked && !agent;
+
+		if ( sent )
+			frame ( TOOLS_WHO, question, 12 );
+
+		ReleaseSRWLockExclusive ( &lock );
+
+		if ( sent && router )
+			router->kick ( );
+
+		return sent;
+
+	}
+
+	void guest_tools::set_display ( uint32_t width, uint32_t height ) {
+
+		AcquireSRWLockExclusive ( &lock );
+		display [ 0 ] = width;
+		display [ 1 ] = height;
+
+		if ( linked && !agent && width && height )
+			frame ( TOOLS_DISPLAY, display, 8 );
+
+		ReleaseSRWLockExclusive ( &lock );
+
+		if ( router )
+			router->kick ( );
 
 	}
 

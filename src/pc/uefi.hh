@@ -21,6 +21,7 @@ namespace pc {
 		bool optical_first = true;
 		uint64_t seed = 0;
 		const wchar_t* variables = nullptr;
+		bool keep_variables = true;
 
 	};
 
@@ -328,6 +329,9 @@ namespace pc {
 		uint32_t text_attribute = 0x07;
 		int32_t text_mode_number = 0;
 		uint32_t graphics_number = 0;
+		static constexpr uint32_t max_graphics = 32;
+		uint16_t graphics_numbers [ max_graphics ] = { };
+		uint32_t graphics_count = 0;
 		int32_t boot_stage = 0;
 		bool booted_disc = false;
 		bool answer_prompt = false;

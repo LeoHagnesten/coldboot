@@ -23,7 +23,7 @@ namespace app {
 
 	int manager_main ( const wchar_t* smoke_path );
 
-	int computer_main ( const wchar_t* path, vm::config& machine_file, const settings& theme, const wchar_t* smoke_path );
+	int computer_main ( const wchar_t* path, vm::config& machine_file, const settings& theme, const wchar_t* smoke_path, const vm::launch_choice& choice );
 
 	bool tools_wanted ( wchar_t** arguments, int32_t count );
 
@@ -1189,9 +1189,15 @@ int program_main ( ) {
 
 	}
 
+	static vm::launch_choice choice;
+
+	vm::read_launch ( arguments, argument_count, choice );
+
 	for ( int32_t i = 1; arguments && i < argument_count; i++ ) {
 
-		if ( base::same_text ( arguments [ i ], L"--vm" ) && i + 1 < argument_count ) {
+		if ( base::same_text ( arguments [ i ], L"--disposable" ) || base::same_text ( arguments [ i ], L"--identity" ) || base::same_text ( arguments [ i ], L"--local-network" ) || base::same_text ( arguments [ i ], L"--route" ) || base::same_text ( arguments [ i ], L"--internet" ) )
+			i++;
+		else if ( base::same_text ( arguments [ i ], L"--vm" ) && i + 1 < argument_count ) {
 
 			copy_path ( machine_path, arguments [ i + 1 ] );
 			i++;
@@ -1294,7 +1300,7 @@ int program_main ( ) {
 		}
 
 		if ( machine_file->machine == vm::MACHINE_PC )
-			return app::computer_main ( machine_path, *machine_file, config, smoke ? smoke_folder : nullptr );
+			return app::computer_main ( machine_path, *machine_file, config, smoke ? smoke_folder : nullptr, choice );
 
 		settings_from_machine ( *machine_file, config );
 

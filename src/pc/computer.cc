@@ -1,8 +1,25 @@
 #include "pc/computer.hh"
 #include "base/files.hh"
 #include "pc/iso.hh"
+#include <ntsecapi.h>
 
 namespace pc {
+
+	static uint64_t random_seed ( ) {
+
+		uint64_t value = 0;
+		LARGE_INTEGER counter;
+
+		if ( !RtlGenRandom ( &value, sizeof ( value ) ) ) {
+
+			QueryPerformanceCounter ( &counter );
+			value = static_cast < uint64_t > ( counter.QuadPart ) * 0x9E3779B97F4A7C15ull ^ GetCurrentProcessId ( );
+
+		}
+
+		return value | 1;
+
+	}
 
 	static const char setup_answers [ ] =
 		"<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n"
@@ -157,7 +174,7 @@ namespace pc {
 
 	bool computer::power_on ( const computer_options& wanted ) {
 
-		power_off ( );
+		release ( );
 		problem [ 0 ] = 0;
 
 		if ( &wanted != &options )
@@ -191,6 +208,9 @@ namespace pc {
 		if ( !video->vram )
 			return fail ( "Couldn't allocate video memory" );
 
+		video->preferred_width = options.screen_width ? options.screen_width : 1024;
+		video->preferred_height = options.screen_width ? options.screen_height : 768;
+
 		vm.attach_ports ( 0x3B0, 0x3DF, video );
 		vm.attach_memory ( 0xA0000, 0x10000, video );
 		vm.attach_ports ( 0x1F0, 0x1F7, storage );
@@ -217,8 +237,14 @@ namespace pc {
 		if ( !disc.present ( ) && options.iso [ 0 ] )
 			disc.open ( options.iso, false );
 
-		if ( !drive.present ( ) && options.disk [ 0 ] && !drive.open ( options.disk, true ) )
-			drive.open ( options.disk, false );
+		if ( !drive.present ( ) && options.disk [ 0 ] ) {
+
+			if ( options.disposable )
+				drive.open_disposable ( options.disk );
+			else if ( !drive.open ( options.disk, true ) )
+				drive.open ( options.disk, false );
+
+		}
 
 		if ( drive.present ( ) )
 			storage->attach ( 0, 0, DRIVE_DISK, &drive );
@@ -251,6 +277,15 @@ namespace pc {
 		for ( const wchar_t* at = options.disk [ 0 ] ? options.disk : options.iso; *at; at++ )
 			links.seed = ( links.seed ^ static_cast < uint64_t > ( *at | 0x20 ) ) * 0x100000001B3ull;
 
+		if ( options.fresh_identity ) {
+
+			if ( !identity_seed )
+				identity_seed = random_seed ( );
+
+			links.seed = identity_seed;
+
+		}
+
 		{
 
 			uint8_t address [ 6 ] = { 0x02, 0xCB, static_cast < uint8_t > ( links.seed >> 24 ), static_cast < uint8_t > ( links.seed >> 32 ), static_cast < uint8_t > ( links.seed >> 40 ), static_cast < uint8_t > ( links.seed >> 48 | 1 ) };
@@ -258,6 +293,16 @@ namespace pc {
 			nic = new e1000 ( *board, vm, 19, address );
 			router = new net::nat ( );
 			router->isolated = !options.network;
+			router->local_network = options.local_network;
+			router->ask_first = options.ask_internet;
+			tools.set_display ( options.screen_width, options.screen_width ? options.screen_height : 0 );
+
+			for ( int32_t i = 0; i < 127 && options.proxy [ i ]; i++ ) {
+
+				router->proxy [ i ] = options.proxy [ i ];
+				router->proxy [ i + 1 ] = 0;
+
+			}
 			router->attach_service ( &tools );
 			tools.router = router;
 			tools.set_policy ( options.sharing );
@@ -294,6 +339,7 @@ namespace pc {
 			efi_links.optical_first = options.optical_first;
 			efi_links.seed = links.seed;
 			efi_links.variables = options.variables [ 0 ] ? options.variables : nullptr;
+			efi_links.keep_variables = !options.disposable;
 			uefi_firmware = new uefi ( );
 
 			if ( !uefi_firmware->install ( efi_links, error, sizeof ( error ) ) )
@@ -340,6 +386,10 @@ namespace pc {
 	void computer::power_off ( ) {
 
 		release ( );
+		identity_seed = 0;
+
+		if ( drive.disposable ( ) )
+			drive.close ( );
 
 	}
 

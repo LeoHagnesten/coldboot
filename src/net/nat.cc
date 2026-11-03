@@ -52,6 +52,10 @@ namespace net {
 		bool local = false;
 		uint64_t sent_at = 0;
 		uint32_t retries = 0;
+		uint8_t proxy_stage = 0;
+		uint32_t reply_size = 0;
+		uint8_t reply [ 272 ] = { };
+		char host [ 256 ] = { };
 
 	};
 
@@ -124,6 +128,9 @@ namespace net {
 		echoes = new echo_request [ max_echoes ];
 		queue = static_cast < uint8_t* > ( runtime_allocate ( queue_slots * slot_size ) );
 		scratch = static_cast < uint8_t* > ( runtime_allocate ( 0x10000 ) );
+		names = new name_entry [ name_slots ] ( );
+		gates = new gate_entry [ max_gates ] ( );
+		requests = new access_request [ max_requests ] ( );
 
 	}
 
@@ -133,6 +140,9 @@ namespace net {
 		delete [ ] links;
 		delete [ ] flows;
 		delete [ ] echoes;
+		delete [ ] names;
+		delete [ ] gates;
+		delete [ ] requests;
 		runtime_release ( queue );
 		runtime_release ( scratch );
 
@@ -155,6 +165,7 @@ namespace net {
 		}
 
 		find_resolver ( );
+		resolve_proxy ( );
 		sequence_seed = static_cast < uint32_t > ( GetTickCount64 ( ) * 2654435761ull );
 		quit = 0;
 		queue_head = 0;
@@ -296,6 +307,591 @@ namespace net {
 
 	}
 
+	bool nat::resolve_proxy ( ) {
+
+		proxy_length = 0;
+
+		if ( !proxy [ 0 ] )
+			return false;
+
+		char host [ 128 ] = { };
+		int32_t colon = -1;
+
+		for ( int32_t i = 0; proxy [ i ] && i < 127; i++ ) {
+
+			host [ i ] = proxy [ i ];
+
+			if ( proxy [ i ] == ':' )
+				colon = i;
+
+		}
+
+		if ( colon < 1 )
+			return false;
+
+		host [ colon ] = 0;
+
+		addrinfo hints = { };
+		addrinfo* found = nullptr;
+
+		hints.ai_family = AF_UNSPEC;
+		hints.ai_socktype = SOCK_STREAM;
+		hints.ai_protocol = IPPROTO_TCP;
+
+		if ( getaddrinfo ( host, host + colon + 1, &hints, &found ) || !found )
+			return false;
+
+		if ( found->ai_addrlen <= sizeof ( proxy_address ) ) {
+
+			move_bytes ( proxy_address, reinterpret_cast < const uint8_t* > ( found->ai_addr ), static_cast < uint32_t > ( found->ai_addrlen ) );
+			proxy_length = static_cast < int32_t > ( found->ai_addrlen );
+
+		}
+
+		freeaddrinfo ( found );
+
+		return proxy_length > 0;
+
+	}
+
+	bool nat::private_address ( uint32_t address ) {
+
+		return ( address >> 24 ) == 10 || ( address >> 24 ) == 127 || ( address >> 24 ) == 0 || ( address & 0xFFF00000u ) == 0xAC100000u || ( address & 0xFFFF0000u ) == 0xC0A80000u || ( address & 0xFFFF0000u ) == 0xA9FE0000u || ( address & 0xFFC00000u ) == 0x64400000u || address >= 0xE0000000u;
+
+	}
+
+	uint32_t nat::name_address ( const char* name ) {
+
+		for ( uint32_t i = 0; i < name_slots; i++ ) {
+
+			if ( names [ i ].address && base::same_text ( names [ i ].name, name ) )
+				return names [ i ].address;
+
+		}
+
+		name_entry& slot = names [ name_next % name_slots ];
+		int32_t length = 0;
+
+		for ( ; name [ length ] && length < 255; length++ )
+			slot.name [ length ] = name [ length ];
+
+		slot.name [ length ] = 0;
+		slot.address = synthetic_base + 1 + name_next % 0x1FFFE;
+		name_next++;
+
+		return slot.address;
+
+	}
+
+	const char* nat::address_name ( uint32_t address ) const {
+
+		for ( uint32_t i = 0; i < name_slots; i++ ) {
+
+			if ( names [ i ].address == address )
+				return names [ i ].name;
+
+		}
+
+		return nullptr;
+
+	}
+
+	void nat::answer_dns ( uint16_t guest_port, const uint8_t* data, uint32_t size ) {
+
+		if ( size < 12 || size > 512 || ( data [ 2 ] & 0x80 ) )
+			return;
+
+		uint8_t out [ 600 ];
+		char name [ 256 ] = { };
+		uint32_t used = 0;
+		uint32_t at = 12;
+		uint32_t labels = 0;
+		bool broken = be16 ( data + 4 ) != 1 || ( data [ 2 ] >> 3 & 15 ) != 0;
+
+		while ( !broken && at < size && data [ at ] ) {
+
+			uint32_t length = data [ at ];
+
+			if ( length > 63 || at + 1 + length >= size || used + length + 1 > 253 ) {
+
+				broken = true;
+
+				break;
+
+			}
+
+			if ( used )
+				name [ used++ ] = '.';
+
+			for ( uint32_t i = 0; i < length; i++ ) {
+
+				char c = static_cast < char > ( data [ at + 1 + i ] );
+
+				name [ used++ ] = c >= 'A' && c <= 'Z' ? static_cast < char > ( c | 0x20 ) : c;
+
+			}
+
+			labels++;
+			at += 1 + length;
+
+		}
+
+		uint32_t question_end = at + 5;
+
+		if ( broken || question_end > size ) {
+
+			move_bytes ( out, data, 12 );
+			out [ 2 ] = static_cast < uint8_t > ( 0x80 | ( data [ 2 ] & 0x79 ) );
+			out [ 3 ] = 0x84;
+
+			for ( int32_t i = 4; i < 12; i++ )
+				out [ i ] = 0;
+
+			udp_out ( resolver_address, 53, guest_address, guest_port, out, 12 );
+
+			return;
+
+		}
+
+		uint16_t type = be16 ( data + at + 1 );
+		uint16_t kind = be16 ( data + at + 3 );
+		auto ends = [ & ] ( const char* tail ) {
+
+			int32_t length = base::text_length ( tail );
+
+			if ( static_cast < int32_t > ( used ) < length )
+				return false;
+
+			for ( int32_t i = 0; i < length; i++ ) {
+
+				if ( name [ used - length + i ] != tail [ i ] )
+					return false;
+
+			}
+
+			return static_cast < int32_t > ( used ) == length || name [ used - length - 1 ] == '.';
+
+		};
+
+		bool hidden = labels < 2 || ends ( "local" ) || ends ( "lan" ) || ends ( "home" ) || ends ( "internal" ) || ends ( "arpa" ) || ends ( "localhost" );
+		uint32_t length = question_end;
+
+		move_bytes ( out, data, question_end );
+		out [ 2 ] = static_cast < uint8_t > ( 0x80 | ( data [ 2 ] & 0x01 ) );
+		out [ 3 ] = static_cast < uint8_t > ( 0x80 | ( hidden ? 3 : 0 ) );
+		put16 ( out + 4, 1 );
+		put16 ( out + 6, 0 );
+		put16 ( out + 8, 0 );
+		put16 ( out + 10, 0 );
+
+		if ( !hidden && type == 1 && kind == 1 ) {
+
+			static const uint8_t record [ 10 ] = { 0xC0, 0x0C, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x3C };
+
+			move_bytes ( out + length, record, 10 );
+			put16 ( out + length + 10, 4 );
+			put32 ( out + length + 12, name_address ( name ) );
+			put16 ( out + 6, 1 );
+			length += 16;
+
+		}
+
+		udp_out ( resolver_address, 53, guest_address, guest_port, out, length );
+
+	}
+
+	void nat::proxy_step ( tcp_link& link ) {
+
+		while ( link.reply_size < sizeof ( link.reply ) ) {
+
+			int got = recv ( link.socket, reinterpret_cast < char* > ( link.reply + link.reply_size ), static_cast < int > ( sizeof ( link.reply ) - link.reply_size ), 0 );
+
+			if ( got == SOCKET_ERROR ) {
+
+				if ( WSAGetLastError ( ) == WSAEWOULDBLOCK )
+					link.readable = false;
+				else
+					got = 0;
+
+				if ( got != 0 )
+					break;
+
+			}
+
+			if ( got <= 0 ) {
+
+				tcp_reset ( link.remote, link.remote_port, guest_address, link.guest_port, 0, link.guest_next );
+				close_link ( link, false );
+
+				return;
+
+			}
+
+			link.reply_size += static_cast < uint32_t > ( got );
+
+		}
+
+		auto fail = [ & ] ( ) {
+
+			tcp_reset ( link.remote, link.remote_port, guest_address, link.guest_port, 0, link.guest_next );
+			close_link ( link, false );
+
+		};
+
+		if ( link.proxy_stage == 2 && link.reply_size >= 2 ) {
+
+			if ( link.reply [ 0 ] != 5 || link.reply [ 1 ] != 0 ) {
+
+				fail ( );
+
+				return;
+
+			}
+
+			uint8_t request [ 300 ];
+			uint32_t length = 0;
+			uint32_t named = static_cast < uint32_t > ( base::text_length ( link.host ) );
+
+			request [ length++ ] = 5;
+			request [ length++ ] = 1;
+			request [ length++ ] = 0;
+
+			if ( named ) {
+
+				request [ length++ ] = 3;
+				request [ length++ ] = static_cast < uint8_t > ( named );
+				move_bytes ( request + length, reinterpret_cast < const uint8_t* > ( link.host ), named );
+				length += named;
+
+			} else {
+
+				request [ length++ ] = 1;
+				put32 ( request + length, link.remote );
+				length += 4;
+
+			}
+
+			put16 ( request + length, link.remote_port );
+			length += 2;
+			move_bytes ( link.reply, link.reply + 2, link.reply_size - 2 );
+			link.reply_size -= 2;
+			link.proxy_stage = 3;
+
+			if ( ::send ( link.socket, reinterpret_cast < const char* > ( request ), static_cast < int > ( length ), 0 ) != static_cast < int > ( length ) ) {
+
+				fail ( );
+
+				return;
+
+			}
+
+		}
+
+		if ( link.proxy_stage == 3 && link.reply_size >= 5 ) {
+
+			if ( link.reply [ 0 ] != 5 || link.reply [ 1 ] != 0 ) {
+
+				fail ( );
+
+				return;
+
+			}
+
+			uint32_t address = link.reply [ 3 ] == 1 ? 4u : ( link.reply [ 3 ] == 4 ? 16u : 1u + link.reply [ 4 ] );
+			uint32_t total = 4 + address + 2;
+
+			if ( link.reply_size < total )
+				return;
+
+			uint32_t extra = link.reply_size - total;
+
+			move_bytes ( link.outgoing, link.reply + total, extra );
+			link.out_size = extra;
+			link.reply_size = 0;
+			link.proxy_stage = 0;
+			link.state = LINK_ANSWERED;
+			link.sent_at = GetTickCount64 ( );
+			link.readable = true;
+			InterlockedIncrement ( &proxied );
+			tcp_out ( link, TCP_SYN | TCP_ACK, link.start, nullptr, 0 );
+
+		}
+
+	}
+
+	bool nat::gate ( uint8_t protocol, uint16_t guest_port, uint32_t remote, uint16_t remote_port, const uint8_t* segment, uint32_t size, const char* host ) {
+
+		if ( !ask_first )
+			return true;
+
+		gate_entry* found = nullptr;
+		gate_entry* spare = nullptr;
+		bool pass = false;
+		bool refuse = false;
+
+		AcquireSRWLockExclusive ( reinterpret_cast < PSRWLOCK > ( &gate_lock ) );
+
+		for ( uint32_t i = 0; i < max_gates; i++ ) {
+
+			gate_entry& item = gates [ i ];
+
+			if ( !item.state ) {
+
+				if ( !spare )
+					spare = &item;
+
+				continue;
+
+			}
+
+			if ( item.protocol == protocol && item.guest_port == guest_port && item.remote == remote && item.remote_port == remote_port )
+				found = &item;
+
+		}
+
+		if ( !found && !spare ) {
+
+			for ( uint32_t i = 0; i < max_gates; i++ ) {
+
+				gate_entry& item = gates [ i ];
+				bool better = !spare || ( item.state != 1 && spare->state == 1 ) || ( ( item.state != 1 ) == ( spare->state != 1 ) && item.since < spare->since );
+
+				if ( better )
+					spare = &item;
+
+			}
+
+		}
+
+		if ( !found && spare && request_count >= max_requests ) {
+
+			for ( uint32_t i = 1; i < request_count; i++ )
+				requests [ i - 1 ] = requests [ i ];
+
+			request_count--;
+
+		}
+
+		if ( found && found->state == 2 ) {
+
+			pass = true;
+			*found = gate_entry ( );
+
+		} else if ( found && found->state == 3 )
+			refuse = protocol == 6;
+		else if ( !found && spare ) {
+
+			*spare = gate_entry ( );
+			spare->id = ++gate_serial;
+			spare->protocol = protocol;
+			spare->state = 1;
+			spare->guest_port = guest_port;
+			spare->remote = remote;
+			spare->remote_port = remote_port;
+			spare->since = GetTickCount64 ( );
+			spare->segment_size = size < sizeof ( spare->segment ) ? size : static_cast < uint32_t > ( sizeof ( spare->segment ) );
+
+			if ( segment )
+				move_bytes ( spare->segment, segment, spare->segment_size );
+
+			access_request& item = requests [ request_count++ ];
+			const char* named = host ? host : address_name ( remote );
+
+			item = access_request ( );
+			item.id = spare->id;
+			item.protocol = protocol;
+			item.guest_port = guest_port;
+			item.remote = remote;
+			item.remote_port = remote_port;
+
+			for ( int32_t i = 0; named && named [ i ] && i < 255; i++ )
+				item.host [ i ] = named [ i ];
+
+		}
+
+		ReleaseSRWLockExclusive ( reinterpret_cast < PSRWLOCK > ( &gate_lock ) );
+
+		if ( refuse && segment && size >= 8 )
+			tcp_reset ( remote, remote_port, guest_address, guest_port, 0, be32 ( segment + 4 ) + 1 );
+
+		return pass;
+
+	}
+
+	bool nat::next_request ( access_request& out ) {
+
+		AcquireSRWLockExclusive ( reinterpret_cast < PSRWLOCK > ( &gate_lock ) );
+
+		bool found = request_count > 0;
+
+		if ( found ) {
+
+			out = requests [ 0 ];
+
+			for ( uint32_t i = 1; i < request_count; i++ )
+				requests [ i - 1 ] = requests [ i ];
+
+			request_count--;
+
+		}
+
+		ReleaseSRWLockExclusive ( reinterpret_cast < PSRWLOCK > ( &gate_lock ) );
+
+		return found;
+
+	}
+
+	void nat::decide ( uint32_t id, bool allow ) {
+
+		AcquireSRWLockExclusive ( reinterpret_cast < PSRWLOCK > ( &gate_lock ) );
+
+		for ( uint32_t i = 0; i < max_gates; i++ ) {
+
+			if ( gates [ i ].state == 1 && gates [ i ].id == id ) {
+
+				gates [ i ].state = allow ? 2 : 3;
+				gates [ i ].since = GetTickCount64 ( );
+
+			}
+
+		}
+
+		ReleaseSRWLockExclusive ( reinterpret_cast < PSRWLOCK > ( &gate_lock ) );
+		kick ( );
+
+	}
+
+	void nat::service_gates ( uint64_t now ) {
+
+		if ( !ask_first )
+			return;
+
+		gate_entry replay [ 8 ];
+		gate_entry refused [ 8 ];
+		uint32_t replays = 0;
+		uint32_t refusals = 0;
+
+		AcquireSRWLockExclusive ( reinterpret_cast < PSRWLOCK > ( &gate_lock ) );
+
+		for ( uint32_t i = 0; i < max_gates; i++ ) {
+
+			gate_entry& item = gates [ i ];
+
+			if ( !item.state )
+				continue;
+
+			if ( item.state == 2 && item.protocol == 6 && !item.handled && replays < 8 ) {
+
+				item.handled = true;
+				replay [ replays++ ] = item;
+
+			} else if ( item.state == 3 && item.protocol == 6 && !item.handled && refusals < 8 ) {
+
+				item.handled = true;
+				refused [ refusals++ ] = item;
+
+			}
+
+			if ( ( item.state == 1 && now - item.since > 120000 ) || ( item.state != 1 && now - item.since > 60000 ) )
+				item = gate_entry ( );
+
+		}
+
+		ReleaseSRWLockExclusive ( reinterpret_cast < PSRWLOCK > ( &gate_lock ) );
+
+		for ( uint32_t i = 0; i < replays; i++ ) {
+
+			InterlockedIncrement ( &replayed );
+			handle_tcp ( guest_address, replay [ i ].remote, replay [ i ].segment, replay [ i ].segment_size );
+
+		}
+
+		for ( uint32_t i = 0; i < refusals; i++ ) {
+
+			if ( refused [ i ].segment_size >= 8 )
+				tcp_reset ( refused [ i ].remote, refused [ i ].remote_port, guest_address, refused [ i ].guest_port, 0, be32 ( refused [ i ].segment + 4 ) + 1 );
+
+		}
+
+	}
+
+	void nat::remember_names ( const uint8_t* data, uint32_t size ) {
+
+		if ( size < 12 || !( data [ 2 ] & 0x80 ) || be16 ( data + 4 ) != 1 )
+			return;
+
+		char name [ 256 ] = { };
+		uint32_t used = 0;
+		uint32_t at = 12;
+
+		while ( at < size && data [ at ] ) {
+
+			uint32_t length = data [ at ];
+
+			if ( length > 63 || at + 1 + length > size || used + length + 1 > 253 )
+				return;
+
+			if ( used )
+				name [ used++ ] = '.';
+
+			for ( uint32_t i = 0; i < length; i++ ) {
+
+				char c = static_cast < char > ( data [ at + 1 + i ] );
+
+				name [ used++ ] = c >= 'A' && c <= 'Z' ? static_cast < char > ( c | 0x20 ) : c;
+
+			}
+
+			at += 1 + length;
+
+		}
+
+		at += 5;
+
+		uint32_t answers = be16 ( data + 6 );
+
+		for ( uint32_t i = 0; i < answers && at < size; i++ ) {
+
+			if ( ( data [ at ] & 0xC0 ) == 0xC0 )
+				at += 2;
+			else {
+
+				while ( at < size && data [ at ] )
+					at += 1u + data [ at ];
+
+				at++;
+
+			}
+
+			if ( at + 10 > size )
+				return;
+
+			uint16_t type = be16 ( data + at );
+			uint32_t length = be16 ( data + at + 8 );
+
+			at += 10;
+
+			if ( at + length > size )
+				return;
+
+			if ( type == 1 && length == 4 && used ) {
+
+				name_entry& slot = names [ name_next % name_slots ];
+
+				for ( uint32_t c = 0; c <= used; c++ )
+					slot.name [ c ] = name [ c ];
+
+				slot.address = be32 ( data + at );
+				name_next++;
+
+			}
+
+			at += length;
+
+		}
+
+	}
+
 	void nat::kick ( ) {
 
 		if ( wake )
@@ -390,6 +986,7 @@ namespace net {
 		if ( activity )
 			WSAResetEvent ( activity );
 
+		service_gates ( now );
 		service_links ( now );
 		service_flows ( now );
 		service_echoes ( );
@@ -571,8 +1168,13 @@ namespace net {
 
 		}
 
-		if ( isolated || !icmp || icmp == INVALID_HANDLE_VALUE || destination >= 0xE0000000u )
+		if ( isolated || !icmp || icmp == INVALID_HANDLE_VALUE || destination >= 0xE0000000u || ( proxy [ 0 ] && !private_address ( destination ) ) || ( !local_network && private_address ( destination ) ) ) {
+
+			InterlockedIncrement ( &blocked );
+
 			return;
+
+		}
 
 		for ( uint32_t i = 0; i < max_echoes; i++ ) {
 
@@ -724,7 +1326,7 @@ namespace net {
 
 		if ( address == resolver_address && number == 53 ) {
 
-			if ( !resolver_length )
+			if ( !resolver_length || proxy [ 0 ] )
 				return false;
 
 			move_bytes ( static_cast < uint8_t* > ( out ), resolver, static_cast < uint32_t > ( resolver_length ) );
@@ -745,6 +1347,22 @@ namespace net {
 
 		if ( address >= 0xE0000000u || !address )
 			return false;
+
+		if ( !local_network && ( private_address ( address ) || address == gateway_address ) ) {
+
+			InterlockedIncrement ( &blocked );
+
+			return false;
+
+		}
+
+		if ( proxy [ 0 ] && !private_address ( address ) ) {
+
+			InterlockedIncrement ( &blocked );
+
+			return false;
+
+		}
 
 		sockaddr_in* place = static_cast < sockaddr_in* > ( out );
 
@@ -776,6 +1394,14 @@ namespace net {
 		if ( destination_port == 67 ) {
 
 			dhcp ( payload, payload_size );
+
+			return;
+
+		}
+
+		if ( proxy [ 0 ] && !isolated && destination == resolver_address && destination_port == 53 ) {
+
+			answer_dns ( source_port, payload, payload_size );
 
 			return;
 
@@ -813,6 +1439,9 @@ namespace net {
 		}
 
 		if ( !flow ) {
+
+			if ( destination != resolver_address && !gate ( 17, source_port, destination, destination_port, nullptr, 0, nullptr ) )
+				return;
 
 			if ( !spare ) {
 
@@ -877,6 +1506,10 @@ namespace net {
 				}
 
 				flow.used_at = now;
+
+				if ( ask_first && flow.remote == resolver_address && flow.remote_port == 53 )
+					remember_names ( scratch, static_cast < uint32_t > ( got ) );
+
 				udp_out ( flow.remote, flow.remote_port, guest_address, flow.guest_port, scratch, static_cast < uint32_t > ( got ) );
 
 			}
@@ -927,9 +1560,22 @@ namespace net {
 
 	}
 
+	uint32_t nat::links_in_use ( ) const {
+
+		uint32_t used = 0;
+
+		for ( uint32_t i = 0; i < max_links; i++ )
+			used += links [ i ].state != LINK_FREE ? 1u : 0u;
+
+		return used;
+
+	}
+
 	void nat::tcp_reset ( uint32_t source, uint16_t source_port, uint32_t destination, uint16_t destination_port, uint32_t sequence, uint32_t acknowledge ) {
 
 		uint8_t head [ 20 ] = { };
+
+		InterlockedIncrement ( &resets );
 
 		put16 ( head, source_port );
 		put16 ( head + 2, destination_port );
@@ -1000,8 +1646,12 @@ namespace net {
 
 		if ( flags & TCP_RST ) {
 
-			if ( link )
+			if ( link ) {
+
+				InterlockedIncrement ( &guest_resets );
 				close_link ( *link, false );
+
+			}
 
 			return;
 
@@ -1072,13 +1722,31 @@ namespace net {
 
 			}
 
-			if ( !link || !map_target ( destination, destination_port, address, address_length ) ) {
+			bool via_proxy = proxy [ 0 ] && !isolated && !private_address ( destination );
+			bool synthetic = ( destination & 0xFFFE0000u ) == synthetic_base;
+			const char* named = via_proxy && synthetic ? address_name ( destination ) : nullptr;
+			bool reachable = via_proxy ? proxy_length > 0 && ( named || !synthetic ) : map_target ( destination, destination_port, address, address_length );
+
+			if ( via_proxy && reachable ) {
+
+				move_bytes ( address, proxy_address, static_cast < uint32_t > ( proxy_length ) );
+				address_length = proxy_length;
+
+			}
+
+			if ( !link || !reachable ) {
+
+				if ( via_proxy )
+					InterlockedIncrement ( &blocked );
 
 				tcp_reset ( destination, destination_port, source, source_port, 0, sequence + 1 );
 
 				return;
 
 			}
+
+			if ( !gate ( 6, source_port, destination, destination_port, data, size, named ) )
+				return;
 
 			SOCKET handle = socket ( reinterpret_cast < sockaddr* > ( address )->sa_family, SOCK_STREAM, IPPROTO_TCP );
 
@@ -1104,6 +1772,7 @@ namespace net {
 
 			}
 
+			InterlockedIncrement ( &connects );
 			*link = tcp_link ( );
 			link->socket = handle;
 			link->remote = destination;
@@ -1118,6 +1787,15 @@ namespace net {
 			link->window = window;
 			link->outgoing = static_cast < uint8_t* > ( runtime_allocate ( out_capacity ) );
 			link->incoming = static_cast < uint8_t* > ( runtime_allocate ( in_capacity ) );
+			link->sent_at = GetTickCount64 ( );
+			link->proxy_stage = via_proxy ? 1 : 0;
+
+			for ( int32_t i = 0; named && named [ i ] && i < 255; i++ ) {
+
+				link->host [ i ] = named [ i ];
+				link->host [ i + 1 ] = 0;
+
+			}
 
 			for ( uint32_t at = 20; at + 1 < header; ) {
 
@@ -1170,6 +1848,7 @@ namespace net {
 			if ( acknowledge != link->start + 1 )
 				return;
 
+			InterlockedIncrement ( &handshakes );
 			link->state = LINK_OPEN;
 			link->acked = acknowledge;
 			link->next = acknowledge;
@@ -1396,6 +2075,7 @@ namespace net {
 
 					if ( events.iErrorCode [ FD_CONNECT_BIT ] ) {
 
+						InterlockedIncrement ( &connect_failures );
 						tcp_reset ( link.remote, link.remote_port, guest_address, link.guest_port, 0, link.guest_next );
 						close_link ( link, false );
 
@@ -1405,7 +2085,22 @@ namespace net {
 
 					link.writable = true;
 
-					if ( link.state == LINK_CONNECTING ) {
+					if ( link.state == LINK_CONNECTING && link.proxy_stage == 1 ) {
+
+						static const char hello [ 3 ] = { 5, 1, 0 };
+
+						if ( ::send ( link.socket, hello, 3, 0 ) != 3 ) {
+
+							tcp_reset ( link.remote, link.remote_port, guest_address, link.guest_port, 0, link.guest_next );
+							close_link ( link, false );
+
+							continue;
+
+						}
+
+						link.proxy_stage = 2;
+
+					} else if ( link.state == LINK_CONNECTING ) {
 
 						link.state = LINK_ANSWERED;
 						link.sent_at = now;
@@ -1426,10 +2121,29 @@ namespace net {
 
 			}
 
+			if ( link.state == LINK_CONNECTING && link.proxy_stage >= 2 && link.readable ) {
+
+				proxy_step ( link );
+
+				if ( link.state == LINK_FREE )
+					continue;
+
+			}
+
+			if ( link.state == LINK_CONNECTING && now - link.sent_at > 30000 ) {
+
+				tcp_reset ( link.remote, link.remote_port, guest_address, link.guest_port, 0, link.guest_next );
+				close_link ( link, false );
+
+				continue;
+
+			}
+
 			if ( link.state == LINK_ANSWERED && now - link.sent_at > 1000 ) {
 
 				if ( ++link.retries > 6 ) {
 
+					InterlockedIncrement ( &unanswered );
 					close_link ( link, true );
 
 					continue;

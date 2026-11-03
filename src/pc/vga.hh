@@ -57,6 +57,14 @@ namespace pc {
 
 		bool render ( uint32_t* out, int32_t& width, int32_t& height, double now );
 
+		void edid ( uint8_t* out ) const {
+
+			build_edid ( preferred_width, preferred_height, out );
+
+		}
+
+		static void build_edid ( uint32_t across, uint32_t down, uint8_t* out );
+
 		static const vbe_mode* find_mode ( uint16_t number );
 
 		uint32_t lfb_address ( ) const {
@@ -94,8 +102,13 @@ namespace pc {
 		int32_t columns = 80;
 		int32_t rows = 25;
 		int32_t char_height = 16;
+		uint16_t preferred_width = 1024;
+		uint16_t preferred_height = 768;
+		uint64_t changes = 0;
 
 	private:
+
+		bool paint ( uint32_t* out, int32_t& width, int32_t& height, double now, uint32_t& difference );
 
 		uint8_t read_port ( uint32_t port );
 
@@ -113,6 +126,8 @@ namespace pc {
 
 		hv::machine& vm;
 		uint32_t mapped_at = 0;
+		int32_t drawn_width = 0;
+		int32_t drawn_height = 0;
 		uint8_t attribute_index = 0;
 		bool attribute_flip = false;
 		uint8_t sequencer_index = 0;

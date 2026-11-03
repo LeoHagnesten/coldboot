@@ -40,6 +40,9 @@ float2 curve ( float2 uv ) {
 
 float4 main ( vertex_out input ) : SV_Target {
 
+	if ( target.w > 0.5 )
+		return float4 ( picture.SampleLevel ( smooth, input.uv * source.xy * source.zw, 0.0 ).rgb, 1.0 );
+
 	if ( target.z < 0.5 )
 		return float4 ( sharp ( input.uv ), 1.0 );
 

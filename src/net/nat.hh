@@ -65,8 +65,83 @@ namespace net {
 		uint8_t guest_mac [ 6 ] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
 		bool guest_known = false;
 		bool isolated = false;
+		bool local_network = true;
+		char proxy [ 128 ] = { };
+		volatile long proxied = 0;
+		volatile long blocked = 0;
+		volatile long replayed = 0;
+		volatile long connects = 0;
+		volatile long connect_failures = 0;
+		volatile long resets = 0;
+		volatile long handshakes = 0;
+		volatile long unanswered = 0;
+		volatile long guest_resets = 0;
+
+		uint32_t links_in_use ( ) const;
+
+		bool ask_first = false;
+
+		static constexpr uint32_t synthetic_base = 0xC6120000u;
+		static constexpr uint32_t name_slots = 1024;
+		static constexpr uint32_t max_gates = 256;
+		static constexpr uint32_t max_requests = 128;
+
+		static bool private_address ( uint32_t address );
+
+		struct access_request {
+
+			uint32_t id = 0;
+			uint8_t protocol = 0;
+			uint16_t guest_port = 0;
+			uint32_t remote = 0;
+			uint16_t remote_port = 0;
+			char host [ 256 ] = { };
+
+		};
+
+		bool next_request ( access_request& out );
+
+		void decide ( uint32_t id, bool allow );
 
 	private:
+
+		struct gate_entry {
+
+			uint32_t id = 0;
+			uint8_t protocol = 0;
+			uint8_t state = 0;
+			bool handled = false;
+			uint16_t guest_port = 0;
+			uint32_t remote = 0;
+			uint16_t remote_port = 0;
+			uint64_t since = 0;
+			uint8_t segment [ 64 ] = { };
+			uint32_t segment_size = 0;
+
+		};
+
+		bool gate ( uint8_t protocol, uint16_t guest_port, uint32_t remote, uint16_t remote_port, const uint8_t* segment, uint32_t size, const char* host );
+
+		void service_gates ( uint64_t now );
+
+		void remember_names ( const uint8_t* data, uint32_t size );
+
+		struct name_entry {
+
+			char name [ 256 ];
+			uint32_t address;
+
+		};
+
+		void answer_dns ( uint16_t guest_port, const uint8_t* data, uint32_t size );
+
+		uint32_t name_address ( const char* name );
+
+		const char* address_name ( uint32_t address ) const;
+
+		bool resolve_proxy ( );
+
+		void proxy_step ( tcp_link& link );
 
 		static unsigned long __stdcall loop ( void* context );
 
@@ -130,6 +205,15 @@ namespace net {
 		uint8_t* scratch = nullptr;
 		uint8_t resolver [ 28 ] = { };
 		int32_t resolver_length = 0;
+		uint8_t proxy_address [ 28 ] = { };
+		int32_t proxy_length = 0;
+		name_entry* names = nullptr;
+		uint32_t name_next = 0;
+		gate_entry* gates = nullptr;
+		access_request* requests = nullptr;
+		uint32_t request_count = 0;
+		uint32_t gate_serial = 0;
+		void* gate_lock = nullptr;
 		uint16_t identity = 1;
 		uint32_t sequence_seed = 0x1000;
 		bool sockets_ready = false;

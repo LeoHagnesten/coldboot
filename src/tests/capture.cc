@@ -9,6 +9,7 @@
 #include "storage/blank.hh"
 #include "storage/program.hh"
 #include "tests/harness.hh"
+#include "ui/console.hh"
 #include "ui/manager.hh"
 #include "ui/shell.hh"
 #include "vm/config.hh"
@@ -444,6 +445,66 @@ namespace tests {
 
 	}
 
+	static bool save_console ( const interface_options& options, const wchar_t* path ) {
+
+		render::gpu* gpu = new render::gpu ( );
+		ui::console* view = new ui::console ( );
+		int32_t view_width = 1060;
+		int32_t view_height = 720;
+		int32_t frame_width = 1280;
+		int32_t frame_height = 800;
+		uint32_t* pixels = static_cast < uint32_t* > ( runtime_allocate ( sizeof ( uint32_t ) * frame_width * frame_height ) );
+		bool saved = false;
+
+		for ( int32_t y = 0; y < frame_height; y++ ) {
+
+			for ( int32_t x = 0; x < frame_width; x++ ) {
+
+				uint32_t blue = static_cast < uint32_t > ( 0xA0 + 0x50 * x / frame_width );
+				uint32_t green = static_cast < uint32_t > ( 0x60 + 0x50 * y / frame_height );
+
+				pixels [ y * frame_width + x ] = y > frame_height - 40 ? 0x101418u : ( 0x0020u << 16 | green << 8 | blue );
+
+			}
+
+		}
+
+		if ( gpu->create ( nullptr, static_cast < int32_t > ( view_width * options.scale ), static_cast < int32_t > ( view_height * options.scale ) ) ) {
+
+			ui::console_view state;
+
+			gpu->set_dpi ( 96.0f * options.scale );
+			view->layout ( static_cast < float > ( view_width ), static_cast < float > ( view_height ), false );
+			state.light = options.light;
+			state.running = true;
+			state.integrated = true;
+			state.tools_linked = true;
+			state.pixels = pixels;
+			state.frame_width = frame_width;
+			state.frame_height = frame_height;
+			state.disc = L"";
+			state.disk = L"Windows 10.img";
+			state.processors = 2;
+			state.memory_mb = 4096;
+			state.fps = 60;
+			state.private_run = true;
+			state.ask_app = L"curl.exe";
+			state.ask_target = L"example.com, port 443";
+			state.ask_more = 2;
+			view->paint ( *gpu, state, 10.0 );
+			gpu->end ( );
+			saved = gpu->save ( path );
+
+		}
+
+		runtime_release ( pixels );
+		delete view;
+		delete gpu;
+
+		return saved;
+
+	}
+
 	static bool save_manager ( machine::xt& board, const interface_options& options, int32_t sheet, bool empty, const wchar_t* path ) {
 
 		static const wchar_t* const home = L"C:\\Users\\you\\Documents\\Coldboot VMs";
@@ -546,6 +607,35 @@ namespace tests {
 				view->form.cap = 80;
 				view->open_sheet ( ui::SHEET_SETTINGS, now );
 				view->set_category ( 1 );
+
+			} else if ( sheet >= 6 && sheet <= 8 ) {
+
+				const wchar_t* name = L"Windows 11";
+
+				state.selected = 2;
+				view->apply_preset ( 0 );
+				view->form.name.set ( name );
+				view->form.screen_width = 1920;
+				view->form.screen_height = 1080;
+				view->form.frame_rate = 0;
+				view->form.scaling = 1;
+				view->form.frame_counter = true;
+				view->form.ask_internet = true;
+				view->form.local_network = false;
+				view->form.use_proxy = true;
+				view->form.proxy.set ( L"127.0.0.1:9050" );
+				view->form.disposable = sheet == 8;
+				view->form.fresh_identity = true;
+
+				for ( int32_t i = 0; name [ i ]; i++ ) {
+
+					view->subject [ i ] = name [ i ];
+					view->subject [ i + 1 ] = 0;
+
+				}
+
+				view->open_sheet ( sheet == 8 ? ui::SHEET_LAUNCH : ui::SHEET_SETTINGS, now );
+				view->set_category ( sheet == 6 ? 4 : 5 );
 
 			} else if ( sheet == 1 ) {
 
@@ -878,7 +968,18 @@ namespace tests {
 			} else if ( base::same_text ( option, L"--manager-sheet" ) ) {
 
 				i++;
-				manager_sheet = base::same_text ( value, L"new" ) ? 1 : ( base::same_text ( value, L"settings" ) ? 2 : ( base::same_text ( value, L"remove" ) ? 3 : ( base::same_text ( value, L"image" ) ? 4 : ( base::same_text ( value, L"system" ) ? 5 : 0 ) ) ) );
+				manager_sheet = base::same_text ( value, L"new" ) ? 1 : ( base::same_text ( value, L"settings" ) ? 2 : ( base::same_text ( value, L"remove" ) ? 3 : ( base::same_text ( value, L"image" ) ? 4 : ( base::same_text ( value, L"system" ) ? 5 : ( base::same_text ( value, L"display" ) ? 6 : ( base::same_text ( value, L"privacy" ) ? 7 : ( base::same_text ( value, L"launch" ) ? 8 : 0 ) ) ) ) ) ) );
+
+			} else if ( base::same_text ( option, L"--console" ) ) {
+
+				i++;
+
+				if ( !save_console ( look, value ) ) {
+
+					print ( "capture: couldn't render the console\r\n" );
+					problems++;
+
+				}
 
 			} else if ( base::same_text ( option, L"--manager-empty" ) )
 				manager_empty = true;

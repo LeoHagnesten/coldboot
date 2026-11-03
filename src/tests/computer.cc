@@ -375,6 +375,10 @@ namespace tests {
 
 	}
 
+	static uint32_t waiting_ids [ 2048 ] = { };
+	static int32_t waiting_count = 0;
+	static bool trusting = false;
+
 	static bool run_control ( pc::computer& machine, const wchar_t* path, const wchar_t* folder, uint32_t* pixels ) {
 
 		HANDLE file = CreateFileW ( path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr );
@@ -481,6 +485,34 @@ namespace tests {
 
 				print ( machine.tools.send_files ( paths, 1, clipboard ? pc::PURPOSE_CLIPBOARD : pc::PURPOSE_SENT, ~0ull ) ? "tools: files sending\r\n" : "tools: files refused\r\n" );
 
+			} else if ( starts ( line, L"allow" ) || starts ( line, L"block" ) ) {
+
+				for ( int32_t i = 0; i < waiting_count && machine.router; i++ )
+					machine.router->decide ( waiting_ids [ i ], line [ 0 ] == L'a' );
+
+				char note [ 96 ];
+
+				wsprintfA ( note, "ask: %s %d, replayed so far %d\r\n", line [ 0 ] == L'a' ? "allowed" : "blocked", waiting_count, machine.router ? static_cast < int > ( machine.router->replayed ) : 0 );
+				print ( note );
+				waiting_count = 0;
+
+			} else if ( starts ( line, L"trust" ) ) {
+
+				trusting = true;
+
+				for ( int32_t i = 0; i < waiting_count && machine.router; i++ )
+					machine.router->decide ( waiting_ids [ i ], true );
+
+				waiting_count = 0;
+				print ( "ask: trusting everything from now on\r\n" );
+
+			} else if ( starts ( line, L"stats" ) && machine.router ) {
+
+				char note [ 240 ];
+
+				wsprintfA ( note, "nat: links %u, connects %d, failed %d, resets %d, replayed %d, blocked %d, handshakes %d, unanswered %d, guest resets %d\r\n", machine.router->links_in_use ( ), static_cast < int > ( machine.router->connects ), static_cast < int > ( machine.router->connect_failures ), static_cast < int > ( machine.router->resets ), static_cast < int > ( machine.router->replayed ), static_cast < int > ( machine.router->blocked ), static_cast < int > ( machine.router->handshakes ), static_cast < int > ( machine.router->unanswered ), static_cast < int > ( machine.router->guest_resets ) );
+				print ( note );
+
 			} else if ( starts ( line, L"power" ) )
 				machine.press_power ( );
 			else if ( starts ( line, L"quit" ) )
@@ -579,6 +611,42 @@ namespace tests {
 				options->network = false;
 			else if ( base::same_text ( arguments [ i ], L"--uefi" ) )
 				options->uefi = true;
+			else if ( base::same_text ( arguments [ i ], L"--disposable" ) )
+				options->disposable = true;
+			else if ( base::same_text ( arguments [ i ], L"--fresh-identity" ) )
+				options->fresh_identity = true;
+			else if ( base::same_text ( arguments [ i ], L"--no-lan" ) )
+				options->local_network = false;
+			else if ( base::same_text ( arguments [ i ], L"--ask" ) )
+				options->ask_internet = true;
+			else if ( base::same_text ( arguments [ i ], L"--proxy" ) ) {
+
+				const wchar_t* value = next ( );
+
+				for ( int32_t c = 0; c < 127 && value [ c ]; c++ )
+					options->proxy [ c ] = static_cast < char > ( value [ c ] );
+
+			} else if ( base::same_text ( arguments [ i ], L"--screen" ) ) {
+
+				const wchar_t* value = next ( );
+				int32_t across = 0;
+				int32_t down = 0;
+				int32_t c = 0;
+
+				for ( ; value [ c ] >= L'0' && value [ c ] <= L'9'; c++ )
+					across = across * 10 + ( value [ c ] - L'0' );
+
+				for ( c += value [ c ] ? 1 : 0; value [ c ] >= L'0' && value [ c ] <= L'9'; c++ )
+					down = down * 10 + ( value [ c ] - L'0' );
+
+				if ( across >= 640 && down >= 400 ) {
+
+					options->screen_width = static_cast < uint16_t > ( across );
+					options->screen_height = static_cast < uint16_t > ( down );
+
+				}
+
+			}
 			else if ( base::same_text ( arguments [ i ], L"--unattend" ) )
 				unattend_user = next ( );
 			else if ( base::same_text ( arguments [ i ], L"--password" ) )
@@ -744,16 +812,48 @@ namespace tests {
 			if ( control && !run_control ( *machine, control, folder, pixels ) )
 				break;
 
+			net::nat::access_request request;
+
+			while ( machine->router && machine->router->next_request ( request ) ) {
+
+				char note [ 400 ] = "ask: ";
+				char digits [ 16 ];
+
+				wsprintfA ( digits, "%u ", request.id );
+				append ( note, sizeof ( note ), digits );
+				append ( note, sizeof ( note ), request.host [ 0 ] ? request.host : "(address)" );
+				wsprintfA ( digits, ":%u", request.remote_port );
+				append ( note, sizeof ( note ), digits );
+				append ( note, sizeof ( note ), request.protocol == 17 ? " udp\r\n" : " tcp\r\n" );
+				print ( note );
+				machine->tools.ask_owner ( request.id, request.protocol, request.guest_port );
+
+				if ( trusting )
+					machine->router->decide ( request.id, true );
+				else if ( waiting_count < 2048 )
+					waiting_ids [ waiting_count++ ] = request.id;
+
+			}
+
 			pc::tools_event happened;
 
 			while ( machine->tools.next_event ( happened ) ) {
 
 				char note [ 600 ] = "tools: ";
-				static const char* const kinds [ 7 ] = { "none", "connected", "disconnected", "text ", "files ", "sent", "refused" };
+				static const char* const kinds [ 8 ] = { "none", "connected", "disconnected", "text ", "files ", "sent", "refused", "owner " };
 
-				append ( note, sizeof ( note ), kinds [ happened.kind < 7 ? happened.kind : 0 ] );
+				append ( note, sizeof ( note ), kinds [ happened.kind < 8 ? happened.kind : 0 ] );
 
-				const base::list < wchar_t >& words = happened.kind == pc::TOOLS_GOT_TEXT ? happened.text : happened.items;
+				if ( happened.kind == pc::TOOLS_OWNER_FOUND ) {
+
+					char digits [ 16 ];
+
+					wsprintfA ( digits, "%u ", happened.count );
+					append ( note, sizeof ( note ), digits );
+
+				}
+
+				const base::list < wchar_t >& words = happened.kind == pc::TOOLS_GOT_TEXT || happened.kind == pc::TOOLS_OWNER_FOUND ? happened.text : happened.items;
 				char narrow [ 400 ] = { };
 
 				if ( !words.empty ( ) )

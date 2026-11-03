@@ -704,12 +704,94 @@ namespace pc {
 
 	}
 
+	void vga::build_edid ( uint32_t across, uint32_t down, uint8_t* out ) {
+
+		static const uint8_t base_block [ 128 ] = {
+
+			0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x0C, 0x56, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00,
+			0x2C, 0x24, 0x01, 0x03, 0x80, 0x34, 0x1D, 0x78, 0x0A, 0xEE, 0x91, 0xA3, 0x54, 0x4C, 0x99, 0x26,
+			0x0F, 0x50, 0x54, 0x21, 0x08, 0x00, 0x81, 0x80, 0x81, 0xC0, 0x81, 0x00, 0x95, 0x00, 0xA9, 0xC0,
+			0xB3, 0x00, 0xD1, 0xC0, 0xD1, 0x00, 0x64, 0x19, 0x00, 0x40, 0x41, 0x00, 0x26, 0x30, 0x18, 0x88,
+			0x36, 0x00, 0x08, 0x22, 0x21, 0x00, 0x00, 0x18, 0x00, 0x00, 0x00, 0xFC, 0x00, 0x43, 0x6F, 0x6C,
+			0x64, 0x62, 0x6F, 0x6F, 0x74, 0x20, 0x56, 0x4D, 0x0A, 0x20, 0x00, 0x00, 0x00, 0xFD, 0x00, 0x32,
+			0x4B, 0x1E, 0x5A, 0x14, 0x00, 0x0A, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x00, 0x00, 0x00, 0x10,
+			0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+
+		};
+
+		for ( int32_t i = 0; i < 128; i++ )
+			out [ i ] = base_block [ i ];
+
+		if ( across != 1024 || down != 768 ) {
+
+			uint32_t blank_across = 160;
+			uint32_t blank_down = base::max ( down / 25u, 23u );
+			uint32_t clock = ( ( across + blank_across ) * ( down + blank_down ) * 60u + 5000u ) / 10000u;
+			uint32_t wide_mm = 520;
+			uint32_t tall_mm = wide_mm * down / across;
+			uint8_t* timing = out + 54;
+
+			out [ 12 ] = static_cast < uint8_t > ( across );
+			out [ 13 ] = static_cast < uint8_t > ( across >> 8 );
+			out [ 14 ] = static_cast < uint8_t > ( down );
+			out [ 15 ] = static_cast < uint8_t > ( down >> 8 );
+			timing [ 0 ] = static_cast < uint8_t > ( clock );
+			timing [ 1 ] = static_cast < uint8_t > ( clock >> 8 );
+			timing [ 2 ] = static_cast < uint8_t > ( across );
+			timing [ 3 ] = static_cast < uint8_t > ( blank_across );
+			timing [ 4 ] = static_cast < uint8_t > ( ( across >> 8 ) << 4 | blank_across >> 8 );
+			timing [ 5 ] = static_cast < uint8_t > ( down );
+			timing [ 6 ] = static_cast < uint8_t > ( blank_down );
+			timing [ 7 ] = static_cast < uint8_t > ( ( down >> 8 ) << 4 | blank_down >> 8 );
+			timing [ 8 ] = 48;
+			timing [ 9 ] = 32;
+			timing [ 10 ] = 3 << 4 | 6;
+			timing [ 11 ] = 0;
+			timing [ 12 ] = static_cast < uint8_t > ( wide_mm );
+			timing [ 13 ] = static_cast < uint8_t > ( tall_mm );
+			timing [ 14 ] = static_cast < uint8_t > ( ( wide_mm >> 8 ) << 4 | tall_mm >> 8 );
+			timing [ 15 ] = 0;
+			timing [ 16 ] = 0;
+			timing [ 17 ] = 0x18;
+
+		}
+
+		uint8_t sum = 0;
+
+		for ( int32_t i = 0; i < 127; i++ )
+			sum = static_cast < uint8_t > ( sum + out [ i ] );
+
+		out [ 127 ] = static_cast < uint8_t > ( 0x100 - sum );
+
+	}
+
 	bool vga::render ( uint32_t* out, int32_t& width, int32_t& height, double now ) {
+
+		uint32_t difference = 0;
+		bool drawn = paint ( out, width, height, now, difference );
+
+		if ( drawn && ( difference || width != drawn_width || height != drawn_height ) )
+			changes++;
+
+		if ( drawn ) {
+
+			drawn_width = width;
+			drawn_height = height;
+
+		}
+
+		return drawn;
+
+	}
+
+	bool vga::paint ( uint32_t* out, int32_t& width, int32_t& height, double now, uint32_t& difference ) {
 
 		if ( !vm.core.memory || vm.core.low_size < 0xC0000 )
 			return false;
 
 		const uint8_t* low = vm.core.memory + 0xA0000;
+
+		difference = kind == VGA_LFB ? 0u : 1u;
 
 		if ( kind == VGA_LFB ) {
 
@@ -725,8 +807,12 @@ namespace pc {
 
 				if ( row + static_cast < uint64_t > ( width ) * bytes > vram_size ) {
 
-					for ( int32_t x = 0; x < width; x++ )
+					for ( int32_t x = 0; x < width; x++ ) {
+
+						difference |= target [ x ];
 						target [ x ] = 0;
+
+					}
 
 					continue;
 
@@ -738,13 +824,25 @@ namespace pc {
 
 					const uint32_t* pixels = reinterpret_cast < const uint32_t* > ( source );
 
-					for ( int32_t x = 0; x < width; x++ )
-						target [ x ] = pixels [ x ] & 0xFFFFFF;
+					for ( int32_t x = 0; x < width; x++ ) {
+
+						uint32_t value = pixels [ x ] & 0xFFFFFF;
+
+						difference |= target [ x ] ^ value;
+						target [ x ] = value;
+
+					}
 
 				} else if ( vbe_bits == 24 ) {
 
-					for ( int32_t x = 0; x < width; x++ )
-						target [ x ] = static_cast < uint32_t > ( source [ x * 3 + 2 ] ) << 16 | static_cast < uint32_t > ( source [ x * 3 + 1 ] ) << 8 | source [ x * 3 ];
+					for ( int32_t x = 0; x < width; x++ ) {
+
+						uint32_t value = static_cast < uint32_t > ( source [ x * 3 + 2 ] ) << 16 | static_cast < uint32_t > ( source [ x * 3 + 1 ] ) << 8 | source [ x * 3 ];
+
+						difference |= target [ x ] ^ value;
+						target [ x ] = value;
+
+					}
 
 				} else if ( vbe_bits == 16 || vbe_bits == 15 ) {
 
@@ -754,15 +852,23 @@ namespace pc {
 						uint32_t red = vbe_bits == 16 ? value >> 11 & 31 : value >> 10 & 31;
 						uint32_t green = vbe_bits == 16 ? ( value >> 5 & 63 ) : ( value >> 5 & 31 ) << 1;
 						uint32_t blue = value & 31;
+						uint32_t pixel = ( red << 3 | red >> 2 ) << 16 | ( green << 2 | green >> 4 ) << 8 | ( blue << 3 | blue >> 2 );
 
-						target [ x ] = ( red << 3 | red >> 2 ) << 16 | ( green << 2 | green >> 4 ) << 8 | ( blue << 3 | blue >> 2 );
+						difference |= target [ x ] ^ pixel;
+						target [ x ] = pixel;
 
 					}
 
 				} else {
 
-					for ( int32_t x = 0; x < width; x++ )
-						target [ x ] = color ( source [ x ] );
+					for ( int32_t x = 0; x < width; x++ ) {
+
+						uint32_t value = color ( source [ x ] );
+
+						difference |= target [ x ] ^ value;
+						target [ x ] = value;
+
+					}
 
 				}
 

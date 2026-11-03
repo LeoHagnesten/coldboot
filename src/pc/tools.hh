@@ -15,6 +15,9 @@ namespace pc {
 		TOOLS_DATA,
 		TOOLS_FILES_END,
 		TOOLS_FOLDER,
+		TOOLS_DISPLAY,
+		TOOLS_WHO,
+		TOOLS_OWNER,
 
 	};
 
@@ -43,6 +46,7 @@ namespace pc {
 		TOOLS_GOT_FILES,
 		TOOLS_SENT,
 		TOOLS_REFUSED,
+		TOOLS_OWNER_FOUND,
 
 	};
 
@@ -74,6 +78,8 @@ namespace pc {
 
 	bool tools_collect ( const wchar_t* source, const wchar_t* name, base::list < tools_entry >& out, uint64_t& total );
 
+	void tools_port_owner ( uint32_t protocol, uint16_t port, wchar_t* out, uint32_t room );
+
 	class guest_tools : public net::service {
 
 	public:
@@ -95,6 +101,10 @@ namespace pc {
 		bool send_files ( const wchar_t ( *paths ) [ MAX_PATH ], int32_t count, uint32_t purpose, uint64_t limit );
 
 		bool next_event ( tools_event& out );
+
+		bool ask_owner ( uint32_t id, uint32_t protocol, uint16_t port );
+
+		void set_display ( uint32_t width, uint32_t height );
 
 		void opened ( ) override;
 
@@ -134,6 +144,7 @@ namespace pc {
 
 		SRWLOCK lock = SRWLOCK_INIT;
 		uint32_t policy = 0;
+		uint32_t display [ 2 ] = { };
 		bool linked = false;
 		base::list < uint8_t > inbound;
 		base::list < uint8_t > outbound;

@@ -40,6 +40,19 @@ namespace ui {
 		ACTION_FILE_SHARING,
 		ACTION_UNATTENDED,
 		ACTION_CATEGORY,
+		ACTION_SCREEN,
+		ACTION_FRAME_RATE,
+		ACTION_SCALING,
+		ACTION_FILTER,
+		ACTION_COUNTER,
+		ACTION_LAN,
+		ACTION_ROUTE,
+		ACTION_IDENTITY,
+		ACTION_DISPOSABLE,
+		ACTION_PREVIEW,
+		ACTION_INTERNET,
+		ACTION_LAUNCH_OPTIONS,
+		ACTION_LAUNCH,
 		ACTION_COUNT,
 
 	};
@@ -50,6 +63,7 @@ namespace ui {
 		SHEET_NEW,
 		SHEET_SETTINGS,
 		SHEET_REMOVE,
+		SHEET_LAUNCH,
 
 	};
 
@@ -151,6 +165,19 @@ namespace ui {
 		bool unattended = true;
 		text_field user;
 		text_field password;
+		uint16_t screen_width = 0;
+		uint16_t screen_height = 0;
+		uint16_t frame_rate = 0;
+		uint8_t scaling = 0;
+		bool smooth = false;
+		bool frame_counter = false;
+		bool local_network = true;
+		bool use_proxy = false;
+		bool ask_internet = false;
+		text_field proxy;
+		bool fresh_identity = false;
+		bool disposable = false;
+		bool keep_preview = true;
 		wchar_t iso [ path_room ] = { };
 		wchar_t disk [ path_room ] = { };
 
@@ -191,6 +218,8 @@ namespace ui {
 		bool name_valid ( ) const;
 
 		bool user_valid ( ) const;
+
+		bool proxy_valid ( ) const;
 
 		bool asks_user ( ) const {
 
@@ -241,13 +270,13 @@ namespace ui {
 
 		text_field& active_field ( ) {
 
-			return focus == 1 ? form.user : ( focus == 2 ? form.password : form.name );
+			return focus == 1 ? form.user : ( focus == 2 ? form.password : ( focus == 3 ? form.proxy : form.name ) );
 
 		}
 
 		const text_field& active_field ( ) const {
 
-			return focus == 1 ? form.user : ( focus == 2 ? form.password : form.name );
+			return focus == 1 ? form.user : ( focus == 2 ? form.password : ( focus == 3 ? form.proxy : form.name ) );
 
 		}
 
@@ -276,6 +305,10 @@ namespace ui {
 		float paint_pc_storage ( render::gpu& gpu, const theme& colors, float x, float y, float inner, bool enabled, bool creating );
 
 		float paint_pc_sharing ( render::gpu& gpu, const theme& colors, float x, float y, float inner, bool enabled );
+
+		float paint_pc_display ( render::gpu& gpu, const theme& colors, float x, float y, float inner, bool enabled );
+
+		float paint_pc_privacy ( render::gpu& gpu, const theme& colors, float x, float y, float inner, bool enabled, double now, bool launching );
 
 		float paint_xt_system ( render::gpu& gpu, const theme& colors, float x, float y, float inner, bool enabled );
 
@@ -308,7 +341,7 @@ namespace ui {
 		float sheet_amount = 0.0f;
 		sheet_kind shown = SHEET_NONE;
 		render::rect sheet_area;
-		render::rect field_areas [ 3 ];
+		render::rect field_areas [ 4 ];
 		int32_t focus = 0;
 		bool field_focused = false;
 		double caret_since = 0.0;
@@ -316,6 +349,7 @@ namespace ui {
 		render::rect slider_areas [ 4 ];
 		int32_t dragging = -1;
 		int32_t category = 0;
+		int32_t segmented_offset = 0;
 		uint32_t host_memory = 4096;
 		uint32_t host_logical = 1;
 		uint32_t host_physical = 1;

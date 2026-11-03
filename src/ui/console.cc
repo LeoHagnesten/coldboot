@@ -124,6 +124,10 @@ namespace ui {
 			return;
 
 		paint_screen ( gpu, colors, state );
+		ask_area = { };
+
+		if ( state.running && state.ask_app )
+			paint_ask ( gpu, colors, state );
 
 		if ( !full ) {
 
@@ -254,8 +258,29 @@ namespace ui {
 
 			}
 
-			frame_area = { math::round ( area.x + ( area.w - target_width ) * 0.5f ), math::round ( area.y + ( area.h - target_height ) * 0.5f ), math::round ( target_width ), math::round ( target_height ) };
-			gpu.screen ( state.pixels, state.frame_width, state.frame_height, frame_area, false );
+			float pixel = gpu.dpi / 96.0f;
+			bool square = aspect == static_cast < float > ( state.frame_width ) / static_cast < float > ( state.frame_height );
+
+			if ( state.scaling && square ) {
+
+				float across = area.w * pixel / static_cast < float > ( state.frame_width );
+				float down = area.h * pixel / static_cast < float > ( state.frame_height );
+				float steps = state.scaling == 2 ? 1.0f : math::floor ( base::min ( across, down ) );
+
+				if ( steps >= 1.0f && across >= steps && down >= steps ) {
+
+					target_width = static_cast < float > ( state.frame_width ) * steps / pixel;
+					target_height = static_cast < float > ( state.frame_height ) * steps / pixel;
+
+				}
+
+			}
+
+			float left = math::round ( ( area.x + ( area.w - target_width ) * 0.5f ) * pixel ) / pixel;
+			float top = math::round ( ( area.y + ( area.h - target_height ) * 0.5f ) * pixel ) / pixel;
+
+			frame_area = { left, top, math::round ( target_width * pixel ) / pixel, math::round ( target_height * pixel ) / pixel };
+			gpu.screen ( state.pixels, state.frame_width, state.frame_height, frame_area, false, state.smooth, state.fresh );
 			add_hit ( frame_area, TOOL_SCREEN );
 
 			return;
@@ -288,6 +313,68 @@ namespace ui {
 		gpu.icon ( render::ICON_PLAY, start.x + 26.0f, start.y + 16.0f, 14.0f, colors.accent_text );
 		gpu.text ( L"Start", render::FONT_STRONG, rect { start.x + 40.0f, start.y, 70.0f, start.h }, colors.accent_text, render::ALIGN_LEFT );
 		add_hit ( start, TOOL_START );
+
+	}
+
+	void console::paint_ask ( render::gpu& gpu, const theme& colors, const console_view& state ) {
+
+		float card_width = base::min ( 560.0f, width - 32.0f );
+		float top = ( full ? 0.0f : toolbar ) + 14.0f;
+		rect card = { math::round ( ( width - card_width ) * 0.5f ), top, card_width, 96.0f };
+		base::writer title;
+		base::writer detail;
+
+		if ( state.ask_app [ 0 ] )
+			title.add ( state.ask_app ).add ( L" wants to go online" );
+		else
+			title.add ( L"An app in the machine wants to go online" );
+
+		detail.add ( state.ask_target );
+
+		if ( state.ask_more > 0 )
+			detail.add ( L"  \x00B7  " ).number ( state.ask_more ).add ( L" more waiting" );
+
+		gpu.shadow ( card, corner_large, 12.0f, colors.shadow );
+		gpu.fill ( card, corner_large, colors.raised );
+		gpu.stroke ( card, corner_large, 1.0f, colors.divider );
+		gpu.fill ( rect { card.x, card.y + 10.0f, 3.0f, card.h - 20.0f }, 1.5f, colors.accent );
+		gpu.text ( title.text ( ), render::FONT_STRONG, rect { card.x + 18.0f, card.y + 12.0f, card.w - 36.0f, 20.0f }, colors.text, render::ALIGN_LEFT );
+		gpu.text ( detail.text ( ), render::FONT_SMALL, rect { card.x + 18.0f, card.y + 34.0f, card.w - 36.0f, 18.0f }, colors.muted, render::ALIGN_LEFT );
+
+		rect box = { card.x + 18.0f, card.bottom ( ) - 30.0f, 14.0f, 14.0f };
+		rect remember = { box.x - 4.0f, box.y - 6.0f, 190.0f, 26.0f };
+
+		if ( hovered == TOOL_REMEMBER )
+			gpu.fill ( remember, corner, colors.hover );
+
+		gpu.fill ( box, 3.0f, state.ask_remember ? colors.accent : colors.inset );
+		gpu.stroke ( box, 3.0f, 1.0f, state.ask_remember ? colors.accent : colors.divider );
+
+		if ( state.ask_remember )
+			gpu.icon ( render::ICON_CHECK, box.x + 7.0f, box.y + 7.0f, 10.0f, colors.accent_text );
+
+		gpu.text ( L"Remember for this machine", render::FONT_SMALL, rect { box.right ( ) + 8.0f, box.y - 3.0f, 170.0f, 20.0f }, colors.muted, render::ALIGN_LEFT );
+		add_hit ( remember, TOOL_REMEMBER );
+
+		rect allow = { card.right ( ) - 18.0f - 84.0f, card.bottom ( ) - 40.0f, 84.0f, 28.0f };
+		rect block = { allow.x - 8.0f - 84.0f, allow.y, 84.0f, 28.0f };
+
+		gpu.fill ( block, corner, colors.inset );
+		gpu.stroke ( block, corner, 1.0f, colors.divider );
+
+		if ( hovered == TOOL_BLOCK )
+			gpu.fill ( block, corner, colors.hover );
+
+		gpu.text ( L"Block", render::FONT_STRONG, block, colors.text, render::ALIGN_CENTER );
+		gpu.fill ( allow, corner, colors.accent );
+
+		if ( hovered == TOOL_ALLOW )
+			gpu.fill ( allow, corner, colors.hover );
+
+		gpu.text ( L"Allow", render::FONT_STRONG, allow, colors.accent_text, render::ALIGN_CENTER );
+		add_hit ( block, TOOL_BLOCK );
+		add_hit ( allow, TOOL_ALLOW );
+		ask_area = card;
 
 	}
 
@@ -345,8 +432,16 @@ namespace ui {
 
 		base::writer right;
 
+		if ( state.running && state.fps > 0 )
+			right.number ( state.fps ).add ( L" fps  \x00B7  " );
+		else if ( state.running && state.fps == 0 )
+			right.add ( L"Idle  \x00B7  " );
+
 		if ( state.running && state.frame_width > 0 )
 			right.number ( state.frame_width ).add ( L" \x00D7 " ).number ( state.frame_height ).add ( L"  \x00B7  " );
+
+		if ( state.running && state.private_run )
+			right.add ( L"Private  \x00B7  " );
 
 		if ( state.tools_linked )
 			right.add ( L"Tools connected  \x00B7  " );

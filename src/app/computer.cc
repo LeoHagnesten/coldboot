@@ -15,7 +15,6 @@
 
 namespace app {
 
-	static constexpr UINT_PTR frame_timer = 1;
 	static constexpr UINT_PTR smoke_timer = 2;
 
 	struct speaker_link : pc::sound_sink {
@@ -36,6 +35,7 @@ namespace app {
 	static ui::console* frontend = nullptr;
 	static render::gpu* display = nullptr;
 	static vm::config* file = nullptr;
+	static vm::config* run = nullptr;
 	static const wchar_t* file_path = nullptr;
 	static const settings* global = nullptr;
 	static HWND window = nullptr;
@@ -82,6 +82,18 @@ namespace app {
 	static wchar_t clipboard_inbox [ MAX_PATH ] = { };
 	static DWORD ignore_sequence = 0;
 	static bool tools_linked = false;
+	static HANDLE pacer = nullptr;
+	static double next_frame = 0.0;
+	static double last_present = 0.0;
+	static double fps_since = 0.0;
+	static uint64_t shown_changes = ~0ull;
+	static uint64_t counted_changes = 0;
+	static int32_t fps_frames = 0;
+	static int32_t fps_shown = -1;
+	static bool input_seen = true;
+	static bool slot_owed = false;
+	static bool lights_shown [ 2 ] = { };
+	static double refresh_period = 1.0 / 60.0;
 
 	struct send_job {
 
@@ -92,6 +104,55 @@ namespace app {
 		bool ok = false;
 
 	};
+
+	struct ask_item {
+
+		uint32_t id = 0;
+		uint8_t protocol = 0;
+		uint16_t guest_port = 0;
+		uint32_t remote = 0;
+		uint16_t remote_port = 0;
+		wchar_t host [ 256 ] = { };
+		wchar_t app [ 64 ] = { };
+		bool named = false;
+		double since = 0.0;
+
+	};
+
+	struct app_rule {
+
+		wchar_t app [ 64 ] = { };
+		bool allow = false;
+		bool saved = false;
+
+	};
+
+	static base::list < ask_item > asks;
+	static base::list < app_rule > rules;
+	static bool ask_remember = false;
+	static wchar_t ask_target [ 320 ] = { };
+
+	static const ask_item* waiting_ask ( int32_t& others ) {
+
+		const ask_item* first = nullptr;
+
+		others = 0;
+
+		for ( const ask_item& item : asks ) {
+
+			if ( !item.named )
+				continue;
+
+			if ( !first )
+				first = &item;
+			else
+				others++;
+
+		}
+
+		return first;
+
+	}
 
 	static double now_seconds ( ) {
 
@@ -156,52 +217,114 @@ namespace app {
 
 	}
 
-	static void render ( ) {
+	static void capture ( double now ) {
+
+		if ( !running )
+			return;
+
+		int32_t width = 0;
+		int32_t height = 0;
+
+		if ( machine->screen ( frame, width, height, now ) ) {
+
+			frame_width = width;
+			frame_height = height;
+
+		}
+
+		long disc_count = machine->disc.activity;
+		long disk_count = machine->drive.activity;
+
+		if ( disc_count != disc_seen ) {
+
+			disc_seen = disc_count;
+			disc_until = now + 0.12;
+
+		}
+
+		if ( disk_count != disk_seen ) {
+
+			disk_seen = disk_count;
+			disk_until = now + 0.12;
+
+		}
+
+		uint64_t changes = machine->screen_changes ( );
+
+		if ( changes != counted_changes ) {
+
+			counted_changes = changes;
+			fps_frames++;
+
+		}
+
+		if ( now - fps_since >= 1.0 ) {
+
+			fps_shown = static_cast < int32_t > ( static_cast < double > ( fps_frames ) / ( now - fps_since ) + 0.5 );
+			fps_frames = 0;
+			fps_since = now;
+
+		}
+
+	}
+
+	static void paint ( double now ) {
 
 		if ( !display || !display->ready ( ) )
 			return;
 
 		RECT client;
 		float factor = scale ( );
-		double now = now_seconds ( );
+		uint64_t changes = running ? machine->screen_changes ( ) : 0;
 
 		GetClientRect ( window, &client );
 		display->set_dpi ( 96.0f * factor );
 		display->resize ( client.right, client.bottom );
 		frontend->layout ( static_cast < float > ( client.right ) / factor, static_cast < float > ( client.bottom ) / factor, fullscreen );
 
-		if ( running ) {
+		ui::console_view view;
 
-			int32_t width = 0;
-			int32_t height = 0;
+		view.fresh = changes != shown_changes;
+		view.smooth = run->smooth;
+		view.scaling = run->scaling;
+		view.fps = run->frame_counter ? fps_shown : -1;
+		view.private_run = vm::private_run ( *run );
 
-			if ( machine->screen ( frame, width, height, now ) ) {
+		int32_t others = 0;
+		const ask_item* asking = running ? waiting_ask ( others ) : nullptr;
 
-				frame_width = width;
-				frame_height = height;
+		if ( asking ) {
+
+			base::writer target;
+			wchar_t dotted [ 20 ];
+
+			if ( asking->host [ 0 ] )
+				target.add ( asking->host );
+			else {
+
+				base::writer address;
+
+				address.number ( static_cast < int32_t > ( asking->remote >> 24 ) ).add ( L"." ).number ( static_cast < int32_t > ( asking->remote >> 16 & 255 ) ).add ( L"." ).number ( static_cast < int32_t > ( asking->remote >> 8 & 255 ) ).add ( L"." ).number ( static_cast < int32_t > ( asking->remote & 255 ) );
+				copy_wide ( dotted, address.text ( ), 20 );
+				target.add ( dotted );
 
 			}
 
-			long disc_count = machine->disc.activity;
-			long disk_count = machine->drive.activity;
-
-			if ( disc_count != disc_seen ) {
-
-				disc_seen = disc_count;
-				disc_until = now + 0.12;
-
-			}
-
-			if ( disk_count != disk_seen ) {
-
-				disk_seen = disk_count;
-				disk_until = now + 0.12;
-
-			}
+			target.add ( L", port " ).number ( asking->remote_port ).add ( asking->protocol == 17 ? L" over UDP" : L"" );
+			copy_wide ( ask_target, target.text ( ), 320 );
+			view.ask_app = asking->app;
+			view.ask_target = ask_target;
+			view.ask_more = others;
+			view.ask_remember = ask_remember;
 
 		}
 
-		ui::console_view view;
+		shown_changes = changes;
+		lights_shown [ 0 ] = now < disc_until;
+		lights_shown [ 1 ] = now < disk_until;
+		last_present = now;
+		input_seen = false;
+		slot_owed = false;
 
 		view.light = light;
 		view.running = running;
@@ -222,6 +345,39 @@ namespace app {
 		view.disk_light = now < disk_until;
 		frontend->paint ( *display, view, now );
 		display->end ( );
+
+	}
+
+	static void render ( ) {
+
+		double now = now_seconds ( );
+
+		capture ( now );
+		shown_changes = ~0ull;
+		paint ( now );
+
+	}
+
+	static bool frame_wanted ( double now ) {
+
+		bool lights [ 2 ] = { now < disc_until, now < disk_until };
+
+		return machine->screen_changes ( ) != shown_changes || input_seen || frontend->animating ( now ) || lights [ 0 ] != lights_shown [ 0 ] || lights [ 1 ] != lights_shown [ 1 ] || now - last_present > 0.5;
+
+	}
+
+	static double read_refresh ( ) {
+
+		MONITORINFOEXW monitor = { };
+		DEVMODEW mode = { };
+
+		monitor.cbSize = sizeof ( monitor );
+		mode.dmSize = sizeof ( mode );
+
+		if ( GetMonitorInfoW ( MonitorFromWindow ( window, MONITOR_DEFAULTTONEAREST ), &monitor ) && EnumDisplaySettingsW ( monitor.szDevice, ENUM_CURRENT_SETTINGS, &mode ) && mode.dmDisplayFrequency > 1 )
+			return 1.0 / static_cast < double > ( mode.dmDisplayFrequency );
+
+		return 1.0 / 60.0;
 
 	}
 
@@ -325,11 +481,13 @@ namespace app {
 
 	static void stop_typing ( );
 
+	static void load_rules ( );
+
 	static void save_preview ( ) {
 
 		wchar_t folder [ MAX_PATH ];
 
-		if ( smoke || !frame_width || !vm::folder_of ( file_path, folder ) )
+		if ( smoke || !frame_width || !run->keep_preview || run->disposable || !vm::folder_of ( file_path, folder ) )
 			return;
 
 		int32_t width = frame_width;
@@ -367,8 +525,26 @@ namespace app {
 		options.uefi = file->uefi;
 		options.network = file->network;
 		options.sharing = ( file->clipboard & 1 ? pc::SHARE_TEXT_IN : 0u ) | ( file->clipboard & 2 ? pc::SHARE_TEXT_OUT : 0u ) | ( file->file_sharing & 1 ? pc::SHARE_FILES_IN : 0u ) | ( file->file_sharing & 2 ? pc::SHARE_FILES_OUT : 0u );
+		options.screen_width = run->screen_width;
+		options.screen_height = run->screen_height;
+		options.local_network = run->local_network;
+		options.ask_internet = run->ask_internet;
+		options.fresh_identity = run->fresh_identity;
+		options.disposable = run->disposable;
+
+		for ( int32_t i = 0; run->use_proxy && i < 127 && run->proxy [ i ]; i++ ) {
+
+			options.proxy [ i ] = run->proxy [ i ];
+			options.proxy [ i + 1 ] = 0;
+
+		}
 		machine->tools.set_inbox ( clipboard_inbox );
 		tools_linked = false;
+		asks.clear ( );
+		ask_remember = false;
+
+		if ( run->ask_internet )
+			load_rules ( );
 		copy_wide ( options.iso, file->iso, MAX_PATH );
 		copy_wide ( options.disk, file->disk, MAX_PATH );
 
@@ -420,7 +596,10 @@ namespace app {
 			toast ( L"Couldn't make the Windows 11 setup helper disc, so Setup may ask for TPM 2.0" );
 
 		refresh_names ( );
-		SetTimer ( window, frame_timer, 16, nullptr );
+		next_frame = now_seconds ( );
+		fps_since = next_frame;
+		fps_frames = 0;
+		fps_shown = -1;
 		render ( );
 
 	}
@@ -444,6 +623,7 @@ namespace app {
 		set_capture ( false );
 		release_keys ( );
 		stop_typing ( );
+		asks.clear ( );
 
 		if ( !machine->restart ( ) ) {
 
@@ -1230,6 +1410,207 @@ namespace app {
 
 	}
 
+	static bool rules_path ( base::writer& out ) {
+
+		wchar_t folder [ MAX_PATH ];
+
+		if ( smoke || !vm::folder_of ( file_path, folder ) )
+			return false;
+
+		out.add ( folder ).add ( L"\\network-rules.txt" );
+
+		return true;
+
+	}
+
+	static void load_rules ( ) {
+
+		base::writer path;
+		base::list < char > text;
+
+		rules.clear ( );
+
+		if ( !rules_path ( path ) || !files::read ( path.text ( ), text ) )
+			return;
+
+		for ( int32_t start = 0; start < text.count ( ); ) {
+
+			int32_t end = start;
+
+			while ( end < text.count ( ) && text [ end ] != '\n' && text [ end ] != 0 )
+				end++;
+
+			int32_t length = end - start;
+
+			while ( length && text [ start + length - 1 ] == '\r' )
+				length--;
+
+			bool allow = length > 6 && text [ start ] == 'a' && text [ start + 5 ] == ' ';
+			bool block = length > 6 && text [ start ] == 'b' && text [ start + 5 ] == ' ';
+
+			if ( allow || block ) {
+
+				app_rule rule;
+				int32_t written = MultiByteToWideChar ( CP_UTF8, 0, text.data ( ) + start + 6, length - 6, rule.app, 63 );
+
+				rule.app [ written > 0 ? written : 0 ] = 0;
+				rule.allow = allow;
+				rule.saved = true;
+				rules.push ( rule );
+
+			}
+
+			start = end + 1;
+
+		}
+
+	}
+
+	static void save_rules ( ) {
+
+		base::writer path;
+		base::list < char > text;
+
+		if ( !rules_path ( path ) )
+			return;
+
+		for ( const app_rule& rule : rules ) {
+
+			char bytes [ 256 ];
+			int32_t length = WideCharToMultiByte ( CP_UTF8, 0, rule.app, -1, bytes, sizeof ( bytes ), nullptr, nullptr );
+
+			if ( !rule.saved || length <= 1 )
+				continue;
+
+			for ( const char* word = rule.allow ? "allow " : "block "; *word; word++ )
+				text.push ( *word );
+
+			for ( int32_t i = 0; i < length - 1; i++ )
+				text.push ( bytes [ i ] );
+
+			text.push ( '\n' );
+
+		}
+
+		files::write ( path.text ( ), text.data ( ), text.count ( ) );
+
+	}
+
+	static int32_t rule_for ( const wchar_t* app ) {
+
+		for ( const app_rule& rule : rules ) {
+
+			if ( CompareStringOrdinal ( rule.app, -1, app, -1, TRUE ) == CSTR_EQUAL )
+				return rule.allow ? 1 : 0;
+
+		}
+
+		return -1;
+
+	}
+
+	static void pump_asks ( double now ) {
+
+		if ( !running || !machine->router || !run->ask_internet )
+			return;
+
+		net::nat::access_request request;
+		bool changed = false;
+
+		while ( machine->router->next_request ( request ) ) {
+
+			ask_item item;
+
+			item.id = request.id;
+			item.protocol = request.protocol;
+			item.guest_port = request.guest_port;
+			item.remote = request.remote;
+			item.remote_port = request.remote_port;
+			item.since = now;
+			MultiByteToWideChar ( CP_UTF8, 0, request.host, -1, item.host, 255 );
+			item.named = !machine->tools.ask_owner ( request.id, request.protocol, request.guest_port );
+			asks.push ( item );
+			changed = true;
+
+		}
+
+		for ( int32_t i = 0; i < asks.count ( ); ) {
+
+			ask_item& item = asks [ i ];
+
+			if ( !item.named && now - item.since > 1.0 ) {
+
+				item.named = true;
+				changed = true;
+
+			}
+
+			int32_t rule = item.named ? rule_for ( item.app ) : -1;
+
+			if ( rule >= 0 || now - item.since > 110.0 ) {
+
+				machine->router->decide ( item.id, rule == 1 );
+				asks.remove_at ( static_cast < size_t > ( i ) );
+				changed = true;
+
+				continue;
+
+			}
+
+			i++;
+
+		}
+
+		if ( changed ) {
+
+			int32_t others = 0;
+
+			input_seen = true;
+
+			if ( waiting_ask ( others ) && captured )
+				set_capture ( false );
+
+		}
+
+	}
+
+	static void answer_ask ( bool allow ) {
+
+		int32_t others = 0;
+		const ask_item* first = waiting_ask ( others );
+
+		if ( !first || !machine->router )
+			return;
+
+		app_rule rule;
+
+		copy_wide ( rule.app, first->app, 64 );
+		rule.allow = allow;
+		rule.saved = ask_remember;
+		rules.push ( rule );
+
+		if ( ask_remember )
+			save_rules ( );
+
+		ask_remember = false;
+
+		for ( int32_t i = 0; i < asks.count ( ); ) {
+
+			if ( asks [ i ].named && CompareStringOrdinal ( asks [ i ].app, -1, rule.app, -1, TRUE ) == CSTR_EQUAL ) {
+
+				machine->router->decide ( asks [ i ].id, allow );
+				asks.remove_at ( static_cast < size_t > ( i ) );
+
+				continue;
+
+			}
+
+			i++;
+
+		}
+
+	}
+
 	static void drain_tools ( ) {
 
 		pc::tools_event item;
@@ -1237,6 +1618,22 @@ namespace app {
 		while ( running && machine->tools.next_event ( item ) ) {
 
 			switch ( item.kind ) {
+
+				case pc::TOOLS_OWNER_FOUND:
+
+					for ( ask_item& waiting : asks ) {
+
+						if ( waiting.id == item.count && !waiting.named ) {
+
+							copy_wide ( waiting.app, item.text.empty ( ) ? L"" : item.text.data ( ), 64 );
+							waiting.named = true;
+							input_seen = true;
+
+						}
+
+					}
+
+					break;
 
 				case pc::TOOLS_CONNECTED:
 					tools_linked = true;
@@ -1422,6 +1819,21 @@ namespace app {
 				install_tools_disc ( );
 				return;
 
+			case ui::TOOL_ALLOW:
+				answer_ask ( true );
+				render ( );
+				return;
+
+			case ui::TOOL_BLOCK:
+				answer_ask ( false );
+				render ( );
+				return;
+
+			case ui::TOOL_REMEMBER:
+				ask_remember = !ask_remember;
+				render ( );
+				return;
+
 			case ui::TOOL_FULLSCREEN:
 				toggle_fullscreen ( );
 				return;
@@ -1444,17 +1856,13 @@ namespace app {
 
 	}
 
-	static void tick ( ) {
+	static bool tick ( ) {
 
-		if ( !running ) {
-
-			KillTimer ( window, frame_timer );
-
-			return;
-
-		}
+		if ( !running )
+			return false;
 
 		drain_tools ( );
+		pump_asks ( now_seconds ( ) );
 
 		bool ready = machine->pointer_ready ( );
 
@@ -1478,12 +1886,12 @@ namespace app {
 
 			case pc::EVENT_RESET:
 				restart ( );
-				return;
+				return true;
 
 			case pc::EVENT_OFF:
 				power_off ( true );
 				toast ( L"The machine shut down" );
-				return;
+				return true;
 
 			case pc::EVENT_FAILED:
 				set_capture ( false );
@@ -1494,13 +1902,23 @@ namespace app {
 				running = false;
 				failed = true;
 				render ( );
-				return;
+				return true;
 
 			default:
-				render ( );
-				return;
+				break;
 
 		}
+
+		double now = now_seconds ( );
+
+		capture ( now );
+
+		if ( !frame_wanted ( now ) )
+			return false;
+
+		paint ( now );
+
+		return true;
 
 	}
 
@@ -1532,6 +1950,9 @@ namespace app {
 	}
 
 	static LRESULT __stdcall procedure ( HWND handle, UINT message, WPARAM wide, LPARAM extra ) {
+
+		if ( ( message >= WM_KEYFIRST && message <= WM_KEYLAST ) || ( message >= WM_MOUSEFIRST && message <= WM_MOUSELAST ) || message == WM_MOUSELEAVE )
+			input_seen = true;
 
 		switch ( message ) {
 
@@ -1578,8 +1999,6 @@ namespace app {
 
 				if ( wide == smoke_timer )
 					smoke_tick ( );
-				else
-					tick ( );
 
 				return 0;
 
@@ -1830,10 +2249,86 @@ namespace app {
 
 	}
 
-	int computer_main ( const wchar_t* path, vm::config& machine_file, const settings& theme, const wchar_t* smoke_path ) {
+	static void pump_messages ( ) {
+
+		MSG message;
+		bool quit = false;
+
+		while ( !quit ) {
+
+			HANDLE waits [ 1 ] = { };
+			DWORD count = 0;
+			DWORD timeout = INFINITE;
+			HANDLE latency = static_cast < HANDLE > ( display->frame_waiter ( ) );
+			bool timed = false;
+
+			if ( running ) {
+
+				double now = now_seconds ( );
+
+				if ( latency && !slot_owed ) {
+
+					waits [ 0 ] = latency;
+					count = 1;
+
+				} else if ( pacer ) {
+
+					double period = latency || !run->frame_rate ? refresh_period : 1.0 / static_cast < double > ( run->frame_rate );
+
+					if ( next_frame < now - period )
+						next_frame = now;
+
+					LARGE_INTEGER due;
+
+					due.QuadPart = -static_cast < LONGLONG > ( base::max ( next_frame - now, 0.0 ) * 10000000.0 ) - 1;
+					SetWaitableTimer ( pacer, &due, 0, nullptr, nullptr, FALSE );
+					waits [ 0 ] = pacer;
+					count = 1;
+					timed = true;
+
+				} else
+					timeout = 8;
+
+			}
+
+			DWORD woke = MsgWaitForMultipleObjectsEx ( count, waits, timeout, QS_ALLINPUT, MWMO_INPUTAVAILABLE );
+
+			while ( PeekMessageW ( &message, nullptr, 0, 0, PM_REMOVE ) ) {
+
+				if ( message.message == WM_QUIT ) {
+
+					quit = true;
+
+					break;
+
+				}
+
+				TranslateMessage ( &message );
+				DispatchMessageW ( &message );
+
+			}
+
+			if ( quit || !running || ( count && woke != WAIT_OBJECT_0 ) || ( !count && woke != WAIT_TIMEOUT ) )
+				continue;
+
+			if ( timed )
+				next_frame += latency || !run->frame_rate ? refresh_period : 1.0 / static_cast < double > ( run->frame_rate );
+
+			bool presented = tick ( );
+
+			if ( latency && !timed && !presented )
+				slot_owed = true;
+
+		}
+
+	}
+
+	int computer_main ( const wchar_t* path, vm::config& machine_file, const settings& theme, const wchar_t* smoke_path, const vm::launch_choice& choice ) {
 
 		QueryPerformanceFrequency ( &frequency );
 		file = &machine_file;
+		run = new vm::config ( machine_file );
+		vm::apply_launch ( choice, *run );
 		file_path = path;
 		global = &theme;
 		smoke = smoke_path != nullptr;
@@ -1907,6 +2402,10 @@ namespace app {
 		RECT client;
 
 		GetClientRect ( window, &client );
+		display->paced = run->frame_rate == 0;
+		display->synced = run->frame_rate == 0;
+		refresh_period = read_refresh ( );
+		pacer = CreateWaitableTimerExW ( nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS );
 
 		if ( !display->create ( window, client.right, client.bottom ) ) {
 
@@ -1927,16 +2426,12 @@ namespace app {
 			ShowWindow ( window, machine_file.maximized ? SW_SHOWMAXIMIZED : SW_SHOW );
 
 		power_on ( );
+		pump_messages ( );
 
-		MSG message;
+		if ( pacer )
+			CloseHandle ( pacer );
 
-		while ( GetMessageW ( &message, nullptr, 0, 0 ) > 0 ) {
-
-			TranslateMessage ( &message );
-			DispatchMessageW ( &message );
-
-		}
-
+		pacer = nullptr;
 		delete machine;
 		speaker.output->stop ( );
 		delete speaker.output;
@@ -1945,6 +2440,8 @@ namespace app {
 		delete frontend;
 		runtime_release ( frame );
 		machine = nullptr;
+		delete run;
+		run = nullptr;
 
 		return 0;
 
