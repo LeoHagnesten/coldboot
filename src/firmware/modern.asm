@@ -2,6 +2,9 @@
 
 rom_segment         equ 0xF000
 service_port        equ 0x0E00
+frame_port          equ 0x0E04
+request_port        equ 0x0E06
+data_port           equ 0x0E08
 reset_port          equ 0x0CF9
 
 entry:
@@ -120,22 +123,46 @@ service:
 	push bp
 	push ds
 	push es
+	mov bp, sp
 
-service_again:
+service_send:
+	mov dx, frame_port
+	xor si, si
+	mov cx, 19
+
+service_frame_out:
+	mov ax, [bp+si]
+	out dx, ax
+	add si, 2
+	loop service_frame_out
+
+service_execute:
 	mov dx, service_port
 	mov ax, bx
 	out dx, ax
-	add dx, 2
-	mov ax, ss
-	out dx, ax
-	add dx, 2
-	mov ax, sp
-	out dx, ax
+
+service_request:
+	mov dx, request_port
 	in ax, dx
 	cmp ax, 1
-	je service_wait
+	je service_input
 	cmp ax, 2
+	je service_output
+	cmp ax, 3
+	je service_wait
+	cmp ax, 4
 	je service_mouse
+
+service_receive:
+	mov dx, frame_port
+	xor si, si
+	mov cx, 19
+
+service_frame_in:
+	in ax, dx
+	mov [bp+si], ax
+	add si, 2
+	loop service_frame_in
 	sti
 	nop
 	cli
@@ -159,11 +186,45 @@ service_done:
 	pop bx
 	iret
 
+service_input:
+	in ax, dx
+	mov es, ax
+	in ax, dx
+	mov di, ax
+	in ax, dx
+	mov cx, ax
+	mov dx, data_port
+
+service_input_loop:
+	es
+	mov al, [di]
+	out dx, al
+	inc di
+	loop service_input_loop
+	jmp service_execute
+
+service_output:
+	in ax, dx
+	mov es, ax
+	in ax, dx
+	mov di, ax
+	in ax, dx
+	mov cx, ax
+	mov dx, data_port
+
+service_output_loop:
+	in al, dx
+	es
+	mov [di], al
+	inc di
+	loop service_output_loop
+	jmp service_request
+
 service_wait:
 	sti
 	hlt
 	cli
-	jmp service_again
+	jmp service_send
 
 service_mouse:
 	mov ax, 0x40
@@ -177,7 +238,7 @@ service_mouse:
 	call far [0x20]
 	cli
 	add sp, 8
-	jmp service_done
+	jmp service_receive
 
 vector_08:
 	push ds

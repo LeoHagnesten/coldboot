@@ -191,9 +191,9 @@ namespace pc {
 
 		code.name ( "_PRT" );
 
-		int32_t routing = code.package ( static_cast < uint8_t > ( 13 * 4 ) );
+		int32_t routing = code.package ( static_cast < uint8_t > ( 15 * 4 ) );
 
-		for ( uint32_t slot = 3; slot < 16; slot++ ) {
+		for ( uint32_t slot = 1; slot < 16; slot++ ) {
 
 			for ( uint32_t pin = 0; pin < 4; pin++ ) {
 
@@ -292,7 +292,7 @@ namespace pc {
 			resources claimed;
 
 			claimed.io ( power_management::base, 0x28 );
-			claimed.io ( 0x0E00, 8 );
+			claimed.io ( 0x0E00, 16 );
 			claimed.io ( 0x92, 1 );
 			claimed.io ( 0x80, 1 );
 			claimed.io ( 0xE9, 1 );

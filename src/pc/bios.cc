@@ -151,7 +151,13 @@ namespace pc {
 	bool bios::install ( const bios_links& links, char* error, int32_t room ) {
 
 		link = links;
-		status = 0;
+		frame_count = 0;
+		frame_cursor = 0;
+		request_count = 0;
+		request_cursor = 0;
+		input_wanted = 0;
+		input_size = 0;
+		output_size = 0;
 		emulating = false;
 		boot_media = 0;
 		mouse_enabled = false;
@@ -448,59 +454,165 @@ namespace pc {
 
 	uint64_t bios::read ( uint64_t address, uint32_t ) {
 
-		return address == port + 4 ? status : 0;
+		uint32_t offset = static_cast < uint32_t > ( address - port );
+
+		if ( offset == 4 )
+			return frame_cursor < 19 ? frame_words [ frame_cursor++ ] : 0;
+
+		if ( offset == 6 )
+			return request_cursor < request_count ? requests [ request_cursor++ ] : 0;
+
+		if ( offset == 8 ) {
+
+			uint32_t at = output_cursor++;
+
+			return at < output_size ? output [ at ] : 0;
+
+		}
+
+		return 0;
 
 	}
 
 	void bios::write ( uint64_t address, uint32_t, uint64_t value ) {
 
-		if ( address == port ) {
+		uint32_t offset = static_cast < uint32_t > ( address - port );
+		uint16_t word = static_cast < uint16_t > ( value );
 
-			pending_vector = static_cast < uint16_t > ( value );
+		if ( offset == 0 )
+			execute ( word );
+		else if ( offset == 4 ) {
+
+			if ( frame_count < 19 )
+				frame_words [ frame_count++ ] = word;
+
+		} else if ( offset == 8 ) {
+
+			if ( input_size < transfer_room )
+				input [ input_size++ ] = static_cast < uint8_t > ( word );
+
+		}
+
+	}
+
+	void bios::execute ( uint16_t vector ) {
+
+		if ( frame_count == 19 ) {
+
+			bios_frame& frame = frame_state;
+
+			frame.es = frame_words [ 0 ];
+			frame.ds = frame_words [ 1 ];
+			frame.ebp = frame_words [ 2 ] | static_cast < uint32_t > ( frame_words [ 3 ] ) << 16;
+			frame.edi = frame_words [ 4 ] | static_cast < uint32_t > ( frame_words [ 5 ] ) << 16;
+			frame.esi = frame_words [ 6 ] | static_cast < uint32_t > ( frame_words [ 7 ] ) << 16;
+			frame.edx = frame_words [ 8 ] | static_cast < uint32_t > ( frame_words [ 9 ] ) << 16;
+			frame.ecx = frame_words [ 10 ] | static_cast < uint32_t > ( frame_words [ 11 ] ) << 16;
+			frame.eax = frame_words [ 12 ] | static_cast < uint32_t > ( frame_words [ 13 ] ) << 16;
+			frame.ebx = frame_words [ 14 ] | static_cast < uint32_t > ( frame_words [ 15 ] ) << 16;
+			frame.ip = frame_words [ 16 ];
+			frame.cs = frame_words [ 17 ];
+			frame.flags = frame_words [ 18 ];
+			input_ready = false;
+			input_size = 0;
+
+		} else
+			input_ready = input_wanted > 0;
+
+		frame_count = 0;
+		request_count = 0;
+		request_cursor = 0;
+		output_size = 0;
+		output_cursor = 0;
+
+		bios_frame working = frame_state;
+		uint32_t result = dispatch ( vector, working );
+
+		if ( result == status_needs_input ) {
+
+			input_size = 0;
+			requests [ request_count++ ] = 1;
+			requests [ request_count++ ] = input_segment;
+			requests [ request_count++ ] = input_offset;
+			requests [ request_count++ ] = static_cast < uint16_t > ( input_wanted );
 
 			return;
 
 		}
 
-		if ( address == port + 2 ) {
+		input_wanted = 0;
+		input_ready = false;
 
-			pending_segment = static_cast < uint16_t > ( value );
+		if ( result == 1 ) {
+
+			requests [ request_count++ ] = 3;
 
 			return;
 
 		}
 
-		if ( address != port + 4 )
-			return;
+		frame_state = working;
 
-		uint32_t at = static_cast < uint32_t > ( pending_segment ) * 16 + static_cast < uint16_t > ( value );
-		bios_frame frame;
+		if ( output_size ) {
 
-		frame.es = peek16 ( at );
-		frame.ds = peek16 ( at + 2 );
-		frame.ebp = peek32 ( at + 4 );
-		frame.edi = peek32 ( at + 8 );
-		frame.esi = peek32 ( at + 12 );
-		frame.edx = peek32 ( at + 16 );
-		frame.ecx = peek32 ( at + 20 );
-		frame.eax = peek32 ( at + 24 );
-		frame.ebx = peek32 ( at + 28 );
-		frame.ip = peek16 ( at + 32 );
-		frame.cs = peek16 ( at + 34 );
-		frame.flags = peek16 ( at + 36 );
-		status = dispatch ( pending_vector, frame );
-		poke16 ( at, frame.es );
-		poke16 ( at + 2, frame.ds );
-		poke32 ( at + 4, frame.ebp );
-		poke32 ( at + 8, frame.edi );
-		poke32 ( at + 12, frame.esi );
-		poke32 ( at + 16, frame.edx );
-		poke32 ( at + 20, frame.ecx );
-		poke32 ( at + 24, frame.eax );
-		poke32 ( at + 28, frame.ebx );
-		poke16 ( at + 32, frame.ip );
-		poke16 ( at + 34, frame.cs );
-		poke16 ( at + 36, frame.flags );
+			requests [ request_count++ ] = 2;
+			requests [ request_count++ ] = output_segment;
+			requests [ request_count++ ] = output_offset;
+			requests [ request_count++ ] = static_cast < uint16_t > ( output_size );
+
+		}
+
+		requests [ request_count++ ] = static_cast < uint16_t > ( result == 2 ? 4 : 0 );
+
+		const bios_frame& frame = frame_state;
+		uint32_t values [ 7 ] = { frame.ebp, frame.edi, frame.esi, frame.edx, frame.ecx, frame.eax, frame.ebx };
+
+		frame_words [ 0 ] = frame.es;
+		frame_words [ 1 ] = frame.ds;
+
+		for ( int32_t i = 0; i < 7; i++ ) {
+
+			frame_words [ 2 + i * 2 ] = static_cast < uint16_t > ( values [ i ] );
+			frame_words [ 3 + i * 2 ] = static_cast < uint16_t > ( values [ i ] >> 16 );
+
+		}
+
+		frame_words [ 16 ] = frame.ip;
+		frame_words [ 17 ] = frame.cs;
+		frame_words [ 18 ] = frame.flags;
+		frame_cursor = 0;
+
+	}
+
+	bool bios::need ( uint16_t segment, uint16_t offset, uint32_t bytes ) {
+
+		if ( !bytes )
+			return true;
+
+		if ( input_ready && input_size >= bytes )
+			return true;
+
+		input_wanted = bytes < 0xFFFF ? bytes : 0xFFFF;
+		input_segment = segment;
+		input_offset = offset;
+
+		return false;
+
+	}
+
+	void bios::give ( uint16_t segment, uint16_t offset, const void* data, uint32_t bytes ) {
+
+		const uint8_t* source = static_cast < const uint8_t* > ( data );
+
+		if ( bytes > 0xFFFF )
+			bytes = 0xFFFF;
+
+		for ( uint32_t i = 0; i < bytes; i++ )
+			output [ i ] = source [ i ];
+
+		output_size = bytes;
+		output_segment = segment;
+		output_offset = offset;
 
 	}
 
@@ -1120,8 +1232,11 @@ namespace pc {
 
 					case 0x02:
 
+						if ( !need ( frame.es, static_cast < uint16_t > ( frame.edx ), 17 ) )
+							return status_needs_input;
+
 						for ( uint32_t i = 0; i < 17; i++ )
-							screen.attributes [ i < 16 ? i : 0x11 ] = peek8 ( frame.es * 16u + ( frame.edx & 0xFFFF ) + i );
+							screen.attributes [ i < 16 ? i : 0x11 ] = taken ( i );
 
 						break;
 
@@ -1137,12 +1252,17 @@ namespace pc {
 						frame.set_bh ( screen.attributes [ 0x11 ] );
 						break;
 
-					case 0x09:
+					case 0x09: {
+
+						uint8_t table [ 17 ];
 
 						for ( uint32_t i = 0; i < 17; i++ )
-							poke8 ( frame.es * 16u + ( frame.edx & 0xFFFF ) + i, screen.attributes [ i < 16 ? i : 0x11 ] );
+							table [ i ] = screen.attributes [ i < 16 ? i : 0x11 ];
 
+						give ( frame.es, static_cast < uint16_t > ( frame.edx ), table, 17 );
 						break;
+
+					}
 
 					case 0x10: {
 
@@ -1158,13 +1278,15 @@ namespace pc {
 					case 0x12: {
 
 						uint32_t first = frame.ebx & 0xFF;
-						uint32_t count = frame.ecx & 0xFFFF;
-						uint32_t source = frame.es * 16u + ( frame.edx & 0xFFFF );
+						uint32_t count = base::min ( frame.ecx & 0xFFFF, 256 - first );
 
-						for ( uint32_t i = 0; i < count && first + i < 256; i++ ) {
+						if ( !need ( frame.es, static_cast < uint16_t > ( frame.edx ), count * 3 ) )
+							return status_needs_input;
+
+						for ( uint32_t i = 0; i < count; i++ ) {
 
 							for ( uint32_t c = 0; c < 3; c++ )
-								screen.dac [ first + i ] [ c ] = peek8 ( source + i * 3 + c ) & 0x3F;
+								screen.dac [ first + i ] [ c ] = taken ( i * 3 + c ) & 0x3F;
 
 						}
 
@@ -1186,16 +1308,17 @@ namespace pc {
 					case 0x17: {
 
 						uint32_t first = frame.ebx & 0xFF;
-						uint32_t count = frame.ecx & 0xFFFF;
-						uint32_t target = frame.es * 16u + ( frame.edx & 0xFFFF );
+						uint32_t count = base::min ( frame.ecx & 0xFFFF, 256 - first );
+						uint8_t table [ 768 ];
 
-						for ( uint32_t i = 0; i < count && first + i < 256; i++ ) {
+						for ( uint32_t i = 0; i < count; i++ ) {
 
 							for ( uint32_t c = 0; c < 3; c++ )
-								poke8 ( target + i * 3 + c, screen.dac [ first + i ] [ c ] );
+								table [ i * 3 + c ] = screen.dac [ first + i ] [ c ];
 
 						}
 
+						give ( frame.es, static_cast < uint16_t > ( frame.edx ), table, count * 3 );
 						break;
 
 					}
@@ -1273,15 +1396,17 @@ namespace pc {
 
 				if ( function == 0x00 || function == 0x10 ) {
 
-					uint32_t count = frame.ecx & 0xFFFF;
-					uint32_t first = frame.edx & 0xFFFF;
-					uint32_t height = frame.bh ( ) ? frame.bh ( ) : 16;
-					uint32_t source = frame.es * 16u + ( frame.ebp & 0xFFFF );
+					uint32_t first = frame.edx & 0xFF;
+					uint32_t count = base::min ( frame.ecx & 0xFFFF, 256 - first );
+					uint32_t height = frame.bh ( ) ? base::min ( static_cast < uint32_t > ( frame.bh ( ) ), 32u ) : 16;
 
-					for ( uint32_t c = 0; c < count && first + c < 256; c++ ) {
+					if ( !need ( frame.es, static_cast < uint16_t > ( frame.ebp ), count * height ) )
+						return status_needs_input;
+
+					for ( uint32_t c = 0; c < count; c++ ) {
 
 						for ( uint32_t line = 0; line < 32; line++ )
-							screen.font [ first + c ] [ line ] = line < height ? peek8 ( source + c * height + line ) : 0;
+							screen.font [ first + c ] [ line ] = line < height ? taken ( c * height + line ) : 0;
 
 					}
 
@@ -1317,17 +1442,19 @@ namespace pc {
 
 			case 0x13: {
 
-				uint32_t count = frame.ecx & 0xFFFF;
-				uint32_t source = frame.es * 16u + ( frame.ebp & 0xFFFF );
 				bool attributes = ( frame.al ( ) & 2 ) != 0;
+				uint32_t count = base::min ( frame.ecx & 0xFFFF, attributes ? 0x7FFFu : 0xFFFFu );
 				uint16_t saved = peek16 ( 0x450 + page * 2u );
+
+				if ( !need ( frame.es, static_cast < uint16_t > ( frame.ebp ), attributes ? count * 2 : count ) )
+					return status_needs_input;
 
 				move_cursor ( page, frame.dh ( ), frame.dl ( ) );
 
 				for ( uint32_t i = 0; i < count; i++ ) {
 
-					uint8_t character = peek8 ( source + ( attributes ? i * 2 : i ) );
-					uint8_t attribute = attributes ? peek8 ( source + i * 2 + 1 ) : frame.bl ( );
+					uint8_t character = taken ( attributes ? i * 2 : i );
+					uint8_t attribute = attributes ? taken ( i * 2 + 1 ) : frame.bl ( );
 
 					put_character ( character, attribute, page, true, character >= 32 );
 
@@ -1350,18 +1477,19 @@ namespace pc {
 
 			case 0x1B: {
 
-				uint32_t target = frame.es * 16u + ( frame.edi & 0xFFFF );
+				uint8_t table [ 64 ] = { };
+				uint16_t columns = peek16 ( 0x44A );
+				uint16_t height = peek16 ( 0x485 );
 
-				for ( uint32_t i = 0; i < 64; i++ )
-					poke8 ( target + i, 0 );
-
-				poke16 ( target, 0 );
-				poke16 ( target + 2, 0xF000 );
-				poke8 ( target + 4, peek8 ( 0x449 ) );
-				poke16 ( target + 5, peek16 ( 0x44A ) );
-				poke8 ( target + 0x22, static_cast < uint8_t > ( peek8 ( 0x484 ) + 1 ) );
-				poke16 ( target + 0x23, peek16 ( 0x485 ) );
-				poke8 ( target + 0x25, 0x08 );
+				table [ 3 ] = 0xF0;
+				table [ 4 ] = peek8 ( 0x449 );
+				table [ 5 ] = static_cast < uint8_t > ( columns );
+				table [ 6 ] = static_cast < uint8_t > ( columns >> 8 );
+				table [ 0x22 ] = static_cast < uint8_t > ( peek8 ( 0x484 ) + 1 );
+				table [ 0x23 ] = static_cast < uint8_t > ( height );
+				table [ 0x24 ] = static_cast < uint8_t > ( height >> 8 );
+				table [ 0x25 ] = 0x08;
+				give ( frame.es, static_cast < uint16_t > ( frame.edi ), table, 64 );
 				frame.set_al ( 0x1B );
 				return 0;
 
@@ -1380,28 +1508,82 @@ namespace pc {
 	uint32_t bios::vbe ( bios_frame& frame ) {
 
 		vga& screen = *link.video;
-		uint32_t buffer = frame.es * 16u + ( frame.edi & 0xFFFF );
+		uint16_t segment = frame.es;
+		uint16_t offset = static_cast < uint16_t > ( frame.edi );
 
 		switch ( frame.al ( ) ) {
 
 			case 0x00: {
 
-				bool wide = peek32 ( buffer ) == 0x32454256;
+				if ( !need ( segment, offset, 4 ) )
+					return status_needs_input;
+
+				bool wide = taken ( 0 ) == 'V' && taken ( 1 ) == 'B' && taken ( 2 ) == 'E' && taken ( 3 ) == '2';
 				uint32_t size = wide ? 512 : 256;
+				uint8_t info [ 512 ] = { };
 
-				for ( uint32_t i = 0; i < size; i++ )
-					poke8 ( buffer + i, 0 );
+				auto put16 = [ & ] ( uint32_t at, uint32_t value ) {
 
-				poke32 ( buffer, 0x41534556 );
-				poke16 ( buffer + 4, 0x0300 );
-				poke32 ( buffer + 6, 0xC0000000u | text_oem );
-				poke32 ( buffer + 10, 0x00000001 );
-				poke32 ( buffer + 14, 0xC0000000u | mode_list );
-				poke16 ( buffer + 18, static_cast < uint16_t > ( vga::vram_size >> 16 ) );
-				poke16 ( buffer + 20, 0x0100 );
-				poke32 ( buffer + 22, 0xC0000000u | text_vendor );
-				poke32 ( buffer + 26, 0xC0000000u | text_product );
-				poke32 ( buffer + 30, 0xC0000000u | text_revision );
+					info [ at ] = static_cast < uint8_t > ( value );
+					info [ at + 1 ] = static_cast < uint8_t > ( value >> 8 );
+
+				};
+
+				auto pointer = [ & ] ( uint32_t at, uint32_t inside, uint32_t rom ) {
+
+					if ( wide ) {
+
+						put16 ( at, ( offset + inside ) & 0xFFFF );
+						put16 ( at + 2, segment );
+
+					} else {
+
+						put16 ( at, rom );
+						put16 ( at + 2, 0xC000 );
+
+					}
+
+				};
+
+				info [ 0 ] = 'V';
+				info [ 1 ] = 'E';
+				info [ 2 ] = 'S';
+				info [ 3 ] = 'A';
+				put16 ( 4, 0x0300 );
+				put16 ( 10, 0x0001 );
+				put16 ( 18, static_cast < uint32_t > ( vga::vram_size >> 16 ) );
+				put16 ( 20, 0x0100 );
+				pointer ( 14, 34, mode_list );
+				pointer ( 6, 256, text_oem );
+				pointer ( 22, 288, text_vendor );
+				pointer ( 26, 320, text_product );
+				pointer ( 30, 352, text_revision );
+
+				if ( wide ) {
+
+					uint32_t at = 34;
+
+					for ( int32_t i = 0; i < vga::mode_count; i++ ) {
+
+						put16 ( at, vga::modes [ i ].number );
+						at += 2;
+
+					}
+
+					put16 ( at, 0xFFFF );
+
+					const char* strings [ 4 ] = { "Coldboot VGA", "Coldboot", "Coldboot Display", "1.0" };
+
+					for ( int32_t s = 0; s < 4; s++ ) {
+
+						for ( int32_t i = 0; strings [ s ] [ i ]; i++ )
+							info [ 256 + s * 32 + i ] = static_cast < uint8_t > ( strings [ s ] [ i ] );
+
+					}
+
+				}
+
+				give ( segment, offset, info, size );
 				frame.set_ax ( 0x004F );
 				return 0;
 
@@ -1486,7 +1668,7 @@ namespace pc {
 				put16 ( 0x32, pitch );
 				info [ 0x34 ] = image_pages;
 				info [ 0x35 ] = image_pages;
-				copy_in ( buffer, info, 256 );
+				give ( segment, offset, info, 256 );
 				frame.set_ax ( 0x004F );
 				return 0;
 
@@ -1592,23 +1774,34 @@ namespace pc {
 
 			case 0x09: {
 
-				uint32_t count = frame.ecx & 0xFFFF;
-				uint32_t first = frame.edx & 0xFFFF;
+				uint32_t first = base::min ( frame.edx & 0xFFFF, 256u );
+				uint32_t count = base::min ( frame.ecx & 0xFFFF, 256 - first );
 
-				for ( uint32_t i = 0; i < count && first + i < 256; i++ ) {
+				if ( frame.bl ( ) == 0x01 ) {
 
-					if ( frame.bl ( ) == 0x01 ) {
+					uint8_t table [ 1024 ];
 
-						poke8 ( buffer + i * 4, screen.dac [ first + i ] [ 2 ] );
-						poke8 ( buffer + i * 4 + 1, screen.dac [ first + i ] [ 1 ] );
-						poke8 ( buffer + i * 4 + 2, screen.dac [ first + i ] [ 0 ] );
-						poke8 ( buffer + i * 4 + 3, 0 );
+					for ( uint32_t i = 0; i < count; i++ ) {
 
-					} else {
+						table [ i * 4 ] = screen.dac [ first + i ] [ 2 ];
+						table [ i * 4 + 1 ] = screen.dac [ first + i ] [ 1 ];
+						table [ i * 4 + 2 ] = screen.dac [ first + i ] [ 0 ];
+						table [ i * 4 + 3 ] = 0;
 
-						screen.dac [ first + i ] [ 2 ] = peek8 ( buffer + i * 4 );
-						screen.dac [ first + i ] [ 1 ] = peek8 ( buffer + i * 4 + 1 );
-						screen.dac [ first + i ] [ 0 ] = peek8 ( buffer + i * 4 + 2 );
+					}
+
+					give ( segment, offset, table, count * 4 );
+
+				} else {
+
+					if ( !need ( segment, offset, count * 4 ) )
+						return status_needs_input;
+
+					for ( uint32_t i = 0; i < count; i++ ) {
+
+						screen.dac [ first + i ] [ 2 ] = taken ( i * 4 );
+						screen.dac [ first + i ] [ 1 ] = taken ( i * 4 + 1 );
+						screen.dac [ first + i ] [ 0 ] = taken ( i * 4 + 2 );
 
 					}
 
@@ -1662,7 +1855,7 @@ namespace pc {
 				}
 
 				block [ 127 ] = static_cast < uint8_t > ( 0x100 - sum );
-				copy_in ( buffer, block, 128 );
+				give ( segment, offset, block, 128 );
 				frame.set_ax ( 0x004F );
 				return 0;
 

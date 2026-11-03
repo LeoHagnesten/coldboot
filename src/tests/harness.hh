@@ -46,4 +46,8 @@ namespace tests {
 
 	void modern_tests ( );
 
+	void network_tests ( );
+
+	void uefi_tests ( );
+
 }

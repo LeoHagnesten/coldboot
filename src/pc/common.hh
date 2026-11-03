@@ -20,6 +20,22 @@ namespace pc {
 
 	};
 
+	struct ticking {
+
+		virtual ~ticking ( ) = default;
+
+		virtual void advance ( uint64_t now ) = 0;
+
+	};
+
+	struct sound_sink {
+
+		virtual ~sound_sink ( ) = default;
+
+		virtual void play ( const float* frames, uint32_t count, uint32_t rate ) = 0;
+
+	};
+
 	uint64_t host_nanoseconds ( );
 
 }

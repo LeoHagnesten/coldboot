@@ -27,6 +27,7 @@ namespace ui {
 		bool running = false;
 		bool failed = false;
 		bool captured = false;
+		bool integrated = false;
 		bool fullscreen = false;
 		const uint32_t* pixels = nullptr;
 		int32_t frame_width = 0;

@@ -1,7 +1,12 @@
 #pragma once
 
+#include "net/nat.hh"
 #include "pc/bios.hh"
+#include "pc/e1000.hh"
+#include "pc/hda.hh"
 #include "pc/platform.hh"
+#include "pc/uefi.hh"
+#include "pc/uhci.hh"
 
 namespace pc {
 
@@ -11,9 +16,12 @@ namespace pc {
 		uint64_t memory = 2048ull * 1024 * 1024;
 		uint32_t cap = 100;
 		bool optical_first = true;
+		bool network = true;
+		bool uefi = false;
 		wchar_t iso [ MAX_PATH ] = { };
 		wchar_t disk [ MAX_PATH ] = { };
 		wchar_t helper [ MAX_PATH ] = { };
+		wchar_t variables [ MAX_PATH ] = { };
 
 	};
 
@@ -52,6 +60,10 @@ namespace pc {
 
 		void mouse ( int32_t dx, int32_t dy, int32_t wheel, uint8_t buttons );
 
+		void pointer ( int32_t x, int32_t y, int32_t wheel, uint8_t buttons );
+
+		bool pointer_ready ( );
+
 		void press_power ( );
 
 		bool change_disc ( const wchar_t* path );
@@ -71,7 +83,14 @@ namespace pc {
 		platform* board = nullptr;
 		vga* video = nullptr;
 		ide_controller* storage = nullptr;
+		uhci* usb = nullptr;
+		usb_tablet* tablet = nullptr;
+		e1000* nic = nullptr;
+		net::nat* router = nullptr;
+		hda* sound = nullptr;
+		sound_sink* speaker = nullptr;
 		bios* firmware = nullptr;
+		uefi* uefi_firmware = nullptr;
 		disk_file disc;
 		disk_file drive;
 		disk_file helper;
@@ -81,6 +100,9 @@ namespace pc {
 		bool fail ( const char* text );
 
 		void release ( );
+
+		long seen_polls = 0;
+		uint64_t polled_at = 0;
 
 	};
 

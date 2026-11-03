@@ -57,6 +57,8 @@ namespace vm {
 		uint32_t processors = 1;
 		uint32_t cap = 100;
 		bool disk_first = false;
+		bool uefi = false;
+		bool network = true;
 		wchar_t iso [ MAX_PATH ] = { };
 		wchar_t disk [ MAX_PATH ] = { };
 		bool turbo = false;

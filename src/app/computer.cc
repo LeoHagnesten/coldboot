@@ -1,3 +1,4 @@
+#include "app/audio.hh"
 #include "app/dialogs.hh"
 #include "app/settings.hh"
 #include "base/files.hh"
@@ -14,7 +15,21 @@ namespace app {
 	static constexpr UINT_PTR frame_timer = 1;
 	static constexpr UINT_PTR smoke_timer = 2;
 
+	struct speaker_link : pc::sound_sink {
+
+		audio* output = nullptr;
+
+		void play ( const float* frames, uint32_t count, uint32_t rate ) override {
+
+			if ( output && output->rate )
+				output->push_stereo ( frames, static_cast < int32_t > ( count ), rate );
+
+		}
+
+	};
+
 	static pc::computer* machine = nullptr;
+	static speaker_link speaker;
 	static ui::console* frontend = nullptr;
 	static render::gpu* display = nullptr;
 	static vm::config* file = nullptr;
@@ -28,6 +43,11 @@ namespace app {
 	static bool running = false;
 	static bool failed = false;
 	static bool captured = false;
+	static bool integrated = false;
+	static bool integration_told = false;
+	static uint8_t pointer_buttons = 0;
+	static int32_t pointer_x = 0;
+	static int32_t pointer_y = 0;
 	static bool fullscreen = false;
 	static bool light = false;
 	static bool smoke = false;
@@ -162,6 +182,7 @@ namespace app {
 		view.running = running;
 		view.failed = failed;
 		view.captured = captured;
+		view.integrated = integrated && running;
 		view.fullscreen = fullscreen;
 		view.pixels = running && frame_width ? frame : nullptr;
 		view.frame_width = frame_width;
@@ -213,7 +234,64 @@ namespace app {
 		if ( buttons && running )
 			machine->mouse ( 0, 0, 0, 0 );
 
+		if ( pointer_buttons && running )
+			machine->pointer ( pointer_x, pointer_y, 0, 0 );
+
 		buttons = 0;
+		pointer_buttons = 0;
+
+	}
+
+	static bool send_pointer ( LPARAM place, int32_t wheel, bool anywhere ) {
+
+		float factor = scale ( );
+		float x = static_cast < float > ( static_cast < int16_t > ( LOWORD ( place ) ) ) / factor;
+		float y = static_cast < float > ( static_cast < int16_t > ( HIWORD ( place ) ) ) / factor;
+		const render::rect& area = frontend->frame_area;
+
+		if ( !running || !integrated || captured || area.w <= 0.0f || area.h <= 0.0f || ( !anywhere && !frontend->over_screen ( x, y ) ) )
+			return false;
+
+		pointer_x = static_cast < int32_t > ( ( x - area.x ) / area.w * static_cast < float > ( pc::usb_tablet::span ) );
+		pointer_y = static_cast < int32_t > ( ( y - area.y ) / area.h * static_cast < float > ( pc::usb_tablet::span ) );
+		machine->pointer ( pointer_x, pointer_y, wheel, pointer_buttons );
+
+		return true;
+
+	}
+
+	static bool pointer_button ( LPARAM place, uint8_t bit, bool down ) {
+
+		if ( down ) {
+
+			uint8_t before = pointer_buttons;
+
+			pointer_buttons |= bit;
+
+			if ( !send_pointer ( place, 0, false ) ) {
+
+				pointer_buttons = before;
+
+				return false;
+
+			}
+
+			SetCapture ( window );
+
+			return true;
+
+		}
+
+		if ( !( pointer_buttons & bit ) )
+			return false;
+
+		pointer_buttons &= static_cast < uint8_t > ( ~bit );
+		send_pointer ( place, 0, true );
+
+		if ( !pointer_buttons )
+			ReleaseCapture ( );
+
+		return true;
 
 	}
 
@@ -258,12 +336,23 @@ namespace app {
 		options.memory = static_cast < uint64_t > ( file->memory_mb ) << 20;
 		options.cap = file->cap;
 		options.optical_first = !file->disk_first;
+		options.uefi = file->uefi;
+		options.network = file->network;
 		copy_wide ( options.iso, file->iso, MAX_PATH );
 		copy_wide ( options.disk, file->disk, MAX_PATH );
 
 		wchar_t folder [ MAX_PATH ];
 		char error [ 160 ] = { };
 		bool helped = true;
+
+		if ( !smoke && file->uefi && vm::folder_of ( file_path, folder ) ) {
+
+			base::writer variables;
+
+			variables.add ( folder ).add ( L"\\nvram.bin" );
+			copy_wide ( options.variables, variables.text ( ), MAX_PATH );
+
+		}
 
 		if ( base::same_text ( file->os, "windows11" ) && vm::folder_of ( file_path, folder ) )
 			helped = pc::make_setup_helper ( folder, options.helper, error, sizeof ( error ) );
@@ -711,6 +800,24 @@ namespace app {
 
 		}
 
+		bool ready = machine->pointer_ready ( );
+
+		if ( ready != integrated ) {
+
+			integrated = ready;
+
+			if ( integrated && captured )
+				set_capture ( false );
+
+			if ( integrated && !integration_told ) {
+
+				integration_told = true;
+				toast ( L"Mouse integration is on, so the pointer moves freely in and out" );
+
+			}
+
+		}
+
 		switch ( machine->poll ( ) ) {
 
 			case pc::EVENT_RESET:
@@ -847,6 +954,7 @@ namespace app {
 					TRACKMOUSEEVENT track = { sizeof ( TRACKMOUSEEVENT ), TME_LEAVE, handle, 0 };
 
 					TrackMouseEvent ( &track );
+					send_pointer ( extra, 0, pointer_buttons != 0 );
 					frontend->mouse_move ( static_cast < float > ( static_cast < int16_t > ( LOWORD ( extra ) ) ) / factor, static_cast < float > ( static_cast < int16_t > ( HIWORD ( extra ) ) ) / factor );
 
 					if ( !running )
@@ -863,7 +971,53 @@ namespace app {
 				render ( );
 				return 0;
 
+			case WM_RBUTTONDOWN:
+			case WM_RBUTTONUP:
+				pointer_button ( extra, 2, message == WM_RBUTTONDOWN );
+				return 0;
+
+			case WM_MBUTTONDOWN:
+			case WM_MBUTTONUP:
+				pointer_button ( extra, 4, message == WM_MBUTTONDOWN );
+				return 0;
+
+			case WM_MOUSEWHEEL: {
+
+				POINT spot = { static_cast < int16_t > ( LOWORD ( extra ) ), static_cast < int16_t > ( HIWORD ( extra ) ) };
+
+				ScreenToClient ( handle, &spot );
+				send_pointer ( MAKELPARAM ( spot.x, spot.y ), GET_WHEEL_DELTA_WPARAM ( wide ) / WHEEL_DELTA, false );
+
+				return 0;
+
+			}
+
+			case WM_SETCURSOR:
+
+				if ( LOWORD ( extra ) == HTCLIENT && integrated && running && !captured ) {
+
+					POINT spot;
+					float factor = scale ( );
+
+					GetCursorPos ( &spot );
+					ScreenToClient ( handle, &spot );
+
+					if ( frontend->over_screen ( static_cast < float > ( spot.x ) / factor, static_cast < float > ( spot.y ) / factor ) ) {
+
+						SetCursor ( nullptr );
+
+						return TRUE;
+
+					}
+
+				}
+
+				break;
+
 			case WM_LBUTTONDOWN:
+
+				if ( pointer_button ( extra, 1, true ) )
+					return 0;
 
 				if ( !captured ) {
 
@@ -878,6 +1032,9 @@ namespace app {
 				return 0;
 
 			case WM_LBUTTONUP:
+
+				if ( pointer_button ( extra, 1, false ) )
+					return 0;
 
 				if ( !captured ) {
 
@@ -1008,6 +1165,12 @@ namespace app {
 		RegisterClassExW ( &type );
 
 		machine = new pc::computer ( );
+		speaker.output = new audio ( );
+
+		if ( !smoke )
+			speaker.output->start ( );
+
+		machine->speaker = &speaker;
 		frontend = new ui::console ( );
 		display = new render::gpu ( );
 		frame = static_cast < uint32_t* > ( runtime_allocate_zero ( sizeof ( uint32_t ) * pc::vga::max_width * pc::vga::max_height ) );
@@ -1070,6 +1233,9 @@ namespace app {
 		}
 
 		delete machine;
+		speaker.output->stop ( );
+		delete speaker.output;
+		speaker.output = nullptr;
 		delete display;
 		delete frontend;
 		runtime_release ( frame );

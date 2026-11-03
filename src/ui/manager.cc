@@ -346,6 +346,7 @@ namespace ui {
 			form.memory_mb = base::min ( item.memory_mb, base::max ( host_memory / 2, 512u ) );
 			form.processors = base::min ( item.processors, base::max ( host_logical / 2, 1u ) );
 			form.disk_gb = item.disk_gb ? item.disk_gb : 16;
+			form.uefi = item.uefi;
 
 		}
 
@@ -411,6 +412,14 @@ namespace ui {
 
 			case ACTION_BOOT:
 				form.disk_first = index == 1;
+				return ACTION_NONE;
+
+			case ACTION_FIRMWARE:
+				form.uefi = index == 1;
+				return ACTION_NONE;
+
+			case ACTION_NETWORK:
+				form.network = index == 0;
 				return ACTION_NONE;
 
 			case ACTION_CATEGORY:
@@ -1253,6 +1262,8 @@ namespace ui {
 	float manager::paint_pc_system ( render::gpu& gpu, const theme& colors, float x, float y, float inner, bool enabled, bool full ) {
 
 		static const wchar_t* const boot_labels [ 2 ] = { L"CD/DVD first", L"Hard disk first" };
+		static const wchar_t* const firmware_labels [ 2 ] = { L"BIOS", L"UEFI" };
+		static const wchar_t* const network_labels [ 2 ] = { L"NAT", L"Off" };
 		float control_x = x + label_column;
 		float track = inner - label_column - 96.0f;
 		color label_tint = enabled ? colors.muted : colors.faint;
@@ -1282,6 +1293,12 @@ namespace ui {
 			y += control_height + 10.0f;
 			gpu.text ( L"Boot order", render::FONT_BODY, rect { x, y, label_column, control_height }, label_tint, render::ALIGN_LEFT );
 			segmented ( gpu, colors, rect { control_x, y, inner - label_column, control_height }, boot_labels, 2, form.disk_first ? 1 : 0, ACTION_BOOT, enabled );
+			y += control_height + 10.0f;
+			gpu.text ( L"Firmware", render::FONT_BODY, rect { x, y, label_column, control_height }, label_tint, render::ALIGN_LEFT );
+			segmented ( gpu, colors, rect { control_x, y, inner - label_column, control_height }, firmware_labels, 2, form.uefi ? 1 : 0, ACTION_FIRMWARE, enabled );
+			y += control_height + 10.0f;
+			gpu.text ( L"Network", render::FONT_BODY, rect { x, y, label_column, control_height }, label_tint, render::ALIGN_LEFT );
+			segmented ( gpu, colors, rect { control_x, y, inner - label_column, control_height }, network_labels, 2, form.network ? 0 : 1, ACTION_NETWORK, enabled );
 			y += control_height + 10.0f;
 
 		}

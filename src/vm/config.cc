@@ -480,7 +480,18 @@ namespace vm {
 				else
 					ok = fail ( error, room, line_number, "boot has to be cd or disk" );
 
-			} else if ( key ( "iso" ) )
+			} else if ( key ( "firmware" ) ) {
+
+				if ( same_key ( value, value_size, "uefi" ) )
+					result->uefi = true;
+				else if ( same_key ( value, value_size, "bios" ) )
+					result->uefi = false;
+				else
+					ok = fail ( error, room, line_number, "firmware has to be bios or uefi" );
+
+			} else if ( key ( "network" ) )
+				ok = flag ( result->network );
+			else if ( key ( "iso" ) )
 				ok = path ( result->iso );
 			else if ( key ( "disk" ) )
 				ok = path ( result->disk );
@@ -664,6 +675,8 @@ namespace vm {
 			put_number ( out, "processors", in.processors );
 			put_number ( out, "cap", in.cap );
 			put ( out, in.disk_first ? "boot=disk\n" : "boot=cd\n" );
+			put ( out, in.uefi ? "firmware=uefi\n" : "firmware=bios\n" );
+			put_number ( out, "network", in.network );
 			put_text ( out, "iso", in.iso, false );
 			put_text ( out, "disk", in.disk, false );
 

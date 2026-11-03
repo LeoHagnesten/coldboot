@@ -34,6 +34,8 @@ namespace ui {
 		ACTION_PICK_DISK,
 		ACTION_DISK_MODE,
 		ACTION_BOOT,
+		ACTION_FIRMWARE,
+		ACTION_NETWORK,
 		ACTION_CATEGORY,
 		ACTION_COUNT,
 
@@ -79,6 +81,7 @@ namespace ui {
 		const wchar_t* detail = L"";
 		const wchar_t* mark = L"";
 		bool modern = false;
+		bool uefi = false;
 		uint32_t memory_mb = 0;
 		uint32_t processors = 1;
 		uint32_t disk_gb = 0;
@@ -136,6 +139,8 @@ namespace ui {
 		int32_t disk_mode = 0;
 		uint32_t disk_gb = 32;
 		bool disk_first = false;
+		bool uefi = false;
+		bool network = true;
 		wchar_t iso [ path_room ] = { };
 		wchar_t disk [ path_room ] = { };
 

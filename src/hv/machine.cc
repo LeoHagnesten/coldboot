@@ -158,6 +158,22 @@ namespace hv {
 
 	}
 
+	void machine::relocate_memory ( device* target, uint64_t from, uint64_t base ) {
+
+		for ( memory_range& range : memory_ranges ) {
+
+			if ( range.target == target && range.base == from ) {
+
+				range.base = base;
+
+				return;
+
+			}
+
+		}
+
+	}
+
 	bool machine::get_state ( uint32_t processor, cpu_state& out ) const {
 
 		WHV_REGISTER_VALUE values [ state_count ] = { };
@@ -625,6 +641,27 @@ namespace hv {
 
 				uint32_t size = io.AccessInfo.AccessSize;
 				uint64_t mask = size >= 4 ? 0xFFFFFFFFull : ( 1ull << ( size * 8 ) ) - 1;
+
+				if ( io.AccessInfo.IsWrite && call_handler && io.PortNumber == call_port ) {
+
+					cpu_state cpu;
+
+					if ( !core.skip ( index, exit ) || !get_state ( index, cpu ) )
+						return fail ( index, "couldn't read a processor for a firmware call", nullptr, 0 );
+
+					call_handler->call ( index, static_cast < uint32_t > ( io.Rax & mask ), cpu );
+
+					WHV_REGISTER_VALUE values [ general_count ] = { };
+
+					for ( uint32_t i = 0; i < 16; i++ )
+						values [ i ].Reg64 = cpu.gpr [ i ];
+
+					values [ 16 ].Reg64 = cpu.rip;
+					values [ 17 ].Reg64 = cpu.rflags;
+
+					return core.set_registers ( index, state_names, general_count, values ) || fail ( index, "couldn't write a firmware call's result", nullptr, 0 );
+
+				}
 
 				if ( io.AccessInfo.IsWrite )
 					out ( io.PortNumber, size, static_cast < uint32_t > ( io.Rax & mask ) );

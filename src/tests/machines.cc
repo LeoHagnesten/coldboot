@@ -186,11 +186,13 @@ namespace tests {
 		modern->processors = 4;
 		modern->cap = 80;
 		modern->disk_first = true;
+		modern->uefi = true;
+		modern->network = false;
 		vm::serialize ( *modern, modern_text );
 
 		bool modern_parsed = vm::parse ( modern_text.data ( ), modern_text.count ( ), *modern_copy, error, sizeof ( error ) );
 
-		expect ( modern_parsed && modern_copy->machine == vm::MACHINE_PC && modern_copy->memory_mb == 8192 && modern_copy->processors == 4 && modern_copy->cap == 80 && modern_copy->disk_first && base::same_text ( modern_copy->iso, modern->iso ) && base::same_text ( modern_copy->disk, modern->disk ), "machines: a modern PC keeps its memory, processors, CPU cap, boot order, ISO and disk" );
+		expect ( modern_parsed && modern_copy->machine == vm::MACHINE_PC && modern_copy->memory_mb == 8192 && modern_copy->processors == 4 && modern_copy->cap == 80 && modern_copy->disk_first && modern_copy->uefi && !modern_copy->network && base::same_text ( modern_copy->iso, modern->iso ) && base::same_text ( modern_copy->disk, modern->disk ), "machines: a modern PC keeps its memory, processors, CPU cap, boot order, firmware, network, ISO and disk" );
 
 		const vm::preset* windows = vm::detect_image ( L"D:\\x\\Win11_24H2_English_x64.iso" );
 		const vm::preset* older = vm::detect_image ( L"D:\\x\\Win10_22H2_English_x64.iso" );

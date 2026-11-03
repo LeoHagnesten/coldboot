@@ -451,6 +451,8 @@ namespace app {
 		out.processors = form.processors;
 		out.cap = form.cap;
 		out.disk_first = form.disk_first;
+		out.uefi = form.uefi;
+		out.network = form.network;
 		copy_text ( out.iso, form.iso, MAX_PATH );
 		copy_text ( out.disk, form.disk_mode == 1 || view->sheet == ui::SHEET_SETTINGS ? form.disk : L"", MAX_PATH );
 
@@ -520,6 +522,8 @@ namespace app {
 		view->form.processors = source.processors;
 		view->form.cap = source.cap;
 		view->form.disk_first = source.disk_first;
+		view->form.uefi = source.uefi;
+		view->form.network = source.network;
 		view->form.disk_mode = source.disk [ 0 ] ? 1 : 2;
 		copy_text ( view->form.iso, source.iso, ui::path_room );
 		copy_text ( view->form.disk, source.disk, ui::path_room );
@@ -1247,6 +1251,7 @@ namespace app {
 			choices [ i ].memory_mb = table [ i ].memory;
 			choices [ i ].processors = table [ i ].processors;
 			choices [ i ].disk_gb = table [ i ].disk_gb;
+			choices [ i ].uefi = base::same_text ( table [ i ].id, "windows11" );
 
 		}
 

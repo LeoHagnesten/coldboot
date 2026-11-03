@@ -86,6 +86,81 @@ namespace app {
 
 	}
 
+	void audio::push_stereo ( const float* frames, int32_t total, uint32_t source_rate ) {
+
+		if ( !rate || !source_rate )
+			return;
+
+		double step = static_cast < double > ( source_rate ) / static_cast < double > ( rate );
+
+		AcquireSRWLockExclusive ( &lock );
+
+		for ( int32_t i = 0; i < total; i++ ) {
+
+			const float* frame = frames + i * 2;
+
+			while ( phase <= 1.0 ) {
+
+				float mix = static_cast < float > ( phase );
+
+				if ( stereo_count == ring_size ) {
+
+					stereo_head = ( stereo_head + 1 ) % ring_size;
+					stereo_count--;
+
+				}
+
+				uint32_t slot = ( stereo_head + stereo_count ) % ring_size;
+
+				stereo [ slot * 2 ] = previous [ 0 ] + ( frame [ 0 ] - previous [ 0 ] ) * mix;
+				stereo [ slot * 2 + 1 ] = previous [ 1 ] + ( frame [ 1 ] - previous [ 1 ] ) * mix;
+				stereo_count++;
+				phase += step;
+
+			}
+
+			phase -= 1.0;
+			previous [ 0 ] = frame [ 0 ];
+			previous [ 1 ] = frame [ 1 ];
+
+		}
+
+		uint32_t limit = rate / 5;
+
+		if ( limit && stereo_count > limit ) {
+
+			stereo_head = ( stereo_head + stereo_count - limit / 2 ) % ring_size;
+			stereo_count = limit / 2;
+
+		}
+
+		ReleaseSRWLockExclusive ( &lock );
+
+	}
+
+	int32_t audio::take_stereo ( float* out, int32_t wanted ) {
+
+		AcquireSRWLockExclusive ( &lock );
+
+		int32_t taken = static_cast < int32_t > ( base::min ( static_cast < uint32_t > ( wanted ), stereo_count ) );
+
+		for ( int32_t i = 0; i < taken; i++ ) {
+
+			uint32_t slot = ( stereo_head + static_cast < uint32_t > ( i ) ) % ring_size;
+
+			out [ i * 2 ] = stereo [ slot * 2 ];
+			out [ i * 2 + 1 ] = stereo [ slot * 2 + 1 ];
+
+		}
+
+		stereo_head = ( stereo_head + static_cast < uint32_t > ( taken ) ) % ring_size;
+		stereo_count -= static_cast < uint32_t > ( taken );
+		ReleaseSRWLockExclusive ( &lock );
+
+		return taken;
+
+	}
+
 	int32_t audio::take ( float* out, int32_t wanted ) {
 
 		AcquireSRWLockExclusive ( &lock );
@@ -162,6 +237,7 @@ namespace app {
 		if ( ok && SUCCEEDED ( client->Start ( ) ) ) {
 
 			float* block = static_cast < float* > ( runtime_allocate ( sizeof ( float ) * frames ) );
+			float* pairs = static_cast < float* > ( runtime_allocate ( sizeof ( float ) * frames * 2 ) );
 			float previous_in = 0.0f;
 			float previous_out = 0.0f;
 			float last = 0.0f;
@@ -187,6 +263,7 @@ namespace app {
 					break;
 
 				int32_t got = take ( block, static_cast < int32_t > ( wanted ) );
+				int32_t paired = take_stereo ( pairs, static_cast < int32_t > ( wanted ) );
 
 				for ( UINT32 i = 0; i < wanted; i++ ) {
 
@@ -200,10 +277,17 @@ namespace app {
 
 					for ( uint32_t c = 0; c < channels; c++ ) {
 
+						float value = output;
+
+						if ( static_cast < int32_t > ( i ) < paired )
+							value += pairs [ i * 2 + ( c & 1 ) ];
+
+						value = value > 1.0f ? 1.0f : ( value < -1.0f ? -1.0f : value );
+
 						if ( floating )
-							reinterpret_cast < float* > ( data ) [ i * channels + c ] = output;
+							reinterpret_cast < float* > ( data ) [ i * channels + c ] = value;
 						else
-							reinterpret_cast < int16_t* > ( data ) [ i * channels + c ] = static_cast < int16_t > ( output * 32767.0f );
+							reinterpret_cast < int16_t* > ( data ) [ i * channels + c ] = static_cast < int16_t > ( value * 32767.0f );
 
 					}
 
@@ -215,6 +299,7 @@ namespace app {
 
 			client->Stop ( );
 			runtime_release ( block );
+			runtime_release ( pairs );
 
 		}
 

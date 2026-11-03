@@ -196,6 +196,18 @@ namespace pc {
 
 	private:
 
+		void execute ( uint16_t vector );
+
+		bool need ( uint16_t segment, uint16_t offset, uint32_t bytes );
+
+		void give ( uint16_t segment, uint16_t offset, const void* data, uint32_t bytes );
+
+		uint8_t taken ( uint32_t index ) const {
+
+			return index < input_size ? input [ index ] : 0;
+
+		}
+
 		uint8_t* memory ( uint32_t address, uint32_t size );
 
 		uint8_t peek8 ( uint32_t address );
@@ -264,10 +276,28 @@ namespace pc {
 
 		uint32_t pci_service ( bios_frame& frame );
 
+		static constexpr uint32_t transfer_room = 0x10000;
+		static constexpr uint32_t status_needs_input = 0x100;
+
 		bios_links link;
-		uint16_t pending_vector = 0;
-		uint16_t pending_segment = 0;
-		uint32_t status = 0;
+		bios_frame frame_state;
+		uint16_t frame_words [ 19 ] = { };
+		uint32_t frame_count = 0;
+		uint32_t frame_cursor = 0;
+		uint16_t requests [ 16 ] = { };
+		uint32_t request_count = 0;
+		uint32_t request_cursor = 0;
+		uint8_t input [ transfer_room ] = { };
+		uint32_t input_size = 0;
+		uint32_t input_wanted = 0;
+		uint16_t input_segment = 0;
+		uint16_t input_offset = 0;
+		bool input_ready = false;
+		uint8_t output [ transfer_room ] = { };
+		uint32_t output_size = 0;
+		uint32_t output_cursor = 0;
+		uint16_t output_segment = 0;
+		uint16_t output_offset = 0;
 		uint32_t vector_offsets [ 32 ] = { };
 		uint32_t no_boot_offset = 0;
 		uint32_t config_offset = 0;

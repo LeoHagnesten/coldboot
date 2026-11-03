@@ -14,12 +14,12 @@ namespace tests {
 
 	struct quiet_bus : pc::platform_bus {
 
-		bool lines [ 16 ] = { };
+		bool lines [ 24 ] = { };
 		int32_t raised = 0;
 
 		void set_irq ( uint32_t irq, bool level ) override {
 
-			if ( irq < 16 ) {
+			if ( irq < 24 ) {
 
 				if ( level && !lines [ irq ] )
 					raised++;
@@ -831,6 +831,7 @@ namespace tests {
 		pc::computer_options* options = new pc::computer_options ( );
 
 		options->memory = 64ull * 1024 * 1024;
+		options->network = false;
 
 		for ( int32_t i = 0; run.iso_path [ i ]; i++ )
 			options->iso [ i ] = run.iso_path [ i ];
@@ -973,11 +974,254 @@ namespace tests {
 	}
 
 
+	static void put32 ( uint8_t* memory, uint32_t at, uint32_t value ) {
+
+		for ( int32_t i = 0; i < 4; i++ )
+			memory [ at + i ] = static_cast < uint8_t > ( value >> ( i * 8 ) );
+
+	}
+
+	static uint32_t get32 ( const uint8_t* memory, uint32_t at ) {
+
+		return static_cast < uint32_t > ( memory [ at ] ) | static_cast < uint32_t > ( memory [ at + 1 ] ) << 8 | static_cast < uint32_t > ( memory [ at + 2 ] ) << 16 | static_cast < uint32_t > ( memory [ at + 3 ] ) << 24;
+
+	}
+
+	static void usb_tests ( ) {
+
+		quiet_bus* bus = new quiet_bus ( );
+		hv::machine* vm = new hv::machine ( );
+
+		if ( !hv::present ( ) || !vm->create ( 1, 2 * 1024 * 1024 ) ) {
+
+			delete vm;
+			delete bus;
+
+			return;
+
+		}
+
+		pc::uhci* usb = new pc::uhci ( *bus, *vm, 16 );
+		pc::usb_tablet* tablet = new pc::usb_tablet ( );
+		uint8_t* memory = vm->memory ( );
+		uint16_t base = usb->base;
+
+		usb->plug ( 0, tablet );
+
+		bool connected = ( usb->read ( base + 0x10, 2 ) & 0x0003 ) == 0x0003 && ( usb->read ( base + 0x12, 2 ) & 0x0001 ) == 0 && ( usb->read ( base + 0x02, 2 ) & 0x0020 );
+
+		usb->write ( base + 0x10, 2, 0x0200 );
+		usb->write ( base + 0x10, 2, 0x0000 );
+		usb->write ( base + 0x10, 2, 0x000E );
+
+		bool enabled = ( usb->read ( base + 0x10, 2 ) & 0x000F ) == 0x0005;
+
+		for ( uint32_t i = 0; i < 1024; i++ )
+			put32 ( memory, 0x1000 + i * 4, 0x2000 | 2 );
+
+		put32 ( memory, 0x2000, 1 );
+		put32 ( memory, 0x2004, 1 );
+		usb->write ( base + 0x08, 4, 0x1000 );
+		usb->write ( base + 0x04, 2, 0x000F );
+		usb->write ( base + 0x00, 2, 0x0001 );
+
+		uint32_t next_td = 0x3000;
+
+		auto queue = [ & ] ( uint8_t pid, uint8_t address, uint8_t endpoint, uint32_t length, uint32_t buffer, bool last ) {
+
+			uint32_t td = next_td;
+
+			next_td += 0x20;
+			put32 ( memory, td, last ? 1u : ( td + 0x20 ) | 4 );
+			put32 ( memory, td + 4, ( 1u << 23 ) | ( 3u << 27 ) | ( last ? 1u << 24 : 0 ) );
+			put32 ( memory, td + 8, pid | static_cast < uint32_t > ( address ) << 8 | static_cast < uint32_t > ( endpoint ) << 15 | ( ( length - 1 ) & 0x7FF ) << 21 );
+			put32 ( memory, td + 12, buffer );
+
+			return td;
+
+		};
+
+		auto control = [ & ] ( uint8_t address, const uint8_t* setup, uint32_t reply ) {
+
+			uint32_t wanted = static_cast < uint32_t > ( setup [ 6 ] | setup [ 7 ] << 8 );
+
+			next_td = 0x3000;
+
+			for ( int32_t i = 0; i < 8; i++ )
+				memory [ 0x4000 + i ] = setup [ i ];
+
+			uint32_t first = queue ( pc::pid_setup, address, 0, 8, 0x4000, false );
+
+			for ( uint32_t done = 0; done < wanted; done += 8 )
+				queue ( pc::pid_in, address, 0, 8, reply + done, false );
+
+			uint32_t status = queue ( wanted ? pc::pid_out : pc::pid_in, address, 0, 0, 0, true );
+
+			put32 ( memory, 0x2004, first );
+
+			for ( int32_t frame = 0; frame < 64 && ( get32 ( memory, status + 4 ) & ( 1u << 23 ) ); frame++ )
+				usb->run_frame ( );
+
+			return !( get32 ( memory, status + 4 ) & 0x00FE0000u ) && !( get32 ( memory, status + 4 ) & ( 1u << 23 ) );
+
+		};
+
+		static const uint8_t get_device [ 8 ] = { 0x80, 0x06, 0x00, 0x01, 0x00, 0x00, 18, 0 };
+		static const uint8_t set_address [ 8 ] = { 0x00, 0x05, 0x05, 0x00, 0x00, 0x00, 0, 0 };
+		static const uint8_t get_report [ 8 ] = { 0x81, 0x06, 0x00, 0x22, 0x00, 0x00, 72, 0 };
+		static const uint8_t set_configuration [ 8 ] = { 0x00, 0x09, 0x01, 0x00, 0x00, 0x00, 0, 0 };
+
+		bool described = control ( 0, get_device, 0x5000 ) && memory [ 0x5000 ] == 18 && memory [ 0x5001 ] == 1 && memory [ 0x5008 ] == 0x09 && memory [ 0x5009 ] == 0x12;
+		bool interrupted = bus->lines [ 16 ] && ( usb->read ( base + 0x02, 2 ) & 0x0001 );
+
+		usb->write ( base + 0x02, 2, 0x0001 );
+
+		bool quiet = !bus->lines [ 16 ];
+		bool addressed = control ( 0, set_address, 0 ) && tablet->address == 5;
+		bool reported = control ( 5, get_report, 0x5100 ) && memory [ 0x5100 ] == 0x05 && memory [ 0x5101 ] == 0x01 && memory [ 0x5100 + 70 ] == 0xC0;
+		bool configured = control ( 5, set_configuration, 0 ) && tablet->configuration == 1;
+
+		expect ( connected && enabled && described && interrupted && quiet && addressed && reported && configured, "modern: UHCI enumerates the USB tablet through reset, descriptors, SET_ADDRESS and SET_CONFIGURATION with IOC interrupts" );
+
+		next_td = 0x3000;
+
+		uint32_t poll = queue ( pc::pid_in, 5, 1, 8, 0x5200, true );
+
+		put32 ( memory, 0x2004, poll );
+		usb->run_frame ( );
+
+		bool waited = ( get32 ( memory, poll + 4 ) & ( 1u << 23 ) ) && ( get32 ( memory, poll + 4 ) & ( 1u << 19 ) );
+
+		tablet->move ( 0x1234, 0x2345, 1, 1 );
+		usb->run_frame ( );
+
+		uint32_t finished = get32 ( memory, poll + 4 );
+		bool moved = !( finished & ( 1u << 23 ) ) && ( finished & 0x7FF ) == 5 && memory [ 0x5200 ] == 1 && memory [ 0x5201 ] == 0x34 && memory [ 0x5202 ] == 0x12 && memory [ 0x5203 ] == 0x45 && memory [ 0x5204 ] == 0x23 && memory [ 0x5205 ] == 1 && ( get32 ( memory, 0x2004 ) & 1 );
+
+		expect ( waited && moved, "modern: the tablet's interrupt endpoint NAKs while idle and then reports absolute X, Y, buttons and wheel" );
+
+		delete usb;
+		delete tablet;
+		delete vm;
+		delete bus;
+
+	}
+
+	struct sound_catcher : pc::sound_sink {
+
+		uint32_t frames = 0;
+		uint32_t rate = 0;
+		float left = 0.0f;
+		float right = 0.0f;
+
+		void play ( const float* samples, uint32_t count, uint32_t speed ) override {
+
+			frames += count;
+			rate = speed;
+			left = samples [ 0 ];
+			right = samples [ 1 ];
+
+		}
+
+	};
+
+	static void sound_tests ( ) {
+
+		quiet_bus* bus = new quiet_bus ( );
+		hv::machine* vm = new hv::machine ( );
+
+		if ( !hv::present ( ) || !vm->create ( 1, 2 * 1024 * 1024 ) ) {
+
+			delete vm;
+			delete bus;
+
+			return;
+
+		}
+
+		pc::hda* sound = new pc::hda ( *bus, *vm, 17 );
+		sound_catcher* catcher = new sound_catcher ( );
+		uint8_t* memory = vm->memory ( );
+		uint64_t base = sound->memory_base;
+
+		sound->connect ( catcher );
+		sound->write ( base + 0x08, 4, 1 );
+
+		bool present = ( sound->read ( base + 0x0E, 2 ) & 1 ) && sound->read ( base + 0x00, 2 ) == 0x4401;
+
+		put32 ( memory, 0x20004, 0x000F0000 );
+		put32 ( memory, 0x20008, 0x002F0009 );
+		put32 ( memory, 0x2000C, 0x003F1C00 );
+		sound->write ( base + 0x40, 4, 0x20000 );
+		sound->write ( base + 0x50, 4, 0x21000 );
+		sound->write ( base + 0x4E, 1, 2 );
+		sound->write ( base + 0x5E, 1, 2 );
+		sound->write ( base + 0x5A, 2, 1 );
+		sound->write ( base + 0x5C, 1, 0x03 );
+		sound->write ( base + 0x20, 4, 0xC0000000u | 1u << 4 );
+		sound->write ( base + 0x4C, 1, 0x02 );
+		sound->write ( base + 0x48, 2, 3 );
+
+		bool answered = get32 ( memory, 0x21008 ) == 0xCB010001 && get32 ( memory, 0x21010 ) == 0x0000041D && get32 ( memory, 0x21018 ) == 0x90170110 && sound->read ( base + 0x58, 2 ) == 3 && sound->read ( base + 0x4A, 2 ) == 3;
+		bool flagged = ( sound->read ( base + 0x5D, 1 ) & 1 ) && ( sound->read ( base + 0x24, 4 ) & 0xC0000000u ) == 0xC0000000u && bus->lines [ 17 ];
+
+		sound->write ( base + 0x5D, 1, 1 );
+		expect ( present && answered && flagged && !bus->lines [ 17 ], "modern: HD Audio finds the codec and answers verbs through CORB and RIRB with an interrupt" );
+
+		sound->verb ( 0x00270610 );
+		sound->verb ( 0x00220011 );
+
+		for ( uint32_t i = 0; i < 480; i++ ) {
+
+			memory [ 0x23000 + i * 4 ] = 0x00;
+			memory [ 0x23000 + i * 4 + 1 ] = 0x40;
+			memory [ 0x23000 + i * 4 + 2 ] = 0x00;
+			memory [ 0x23000 + i * 4 + 3 ] = 0xC0;
+
+		}
+
+		put32 ( memory, 0x22000, 0x23000 );
+		put32 ( memory, 0x22004, 0 );
+		put32 ( memory, 0x22008, 960 );
+		put32 ( memory, 0x2200C, 1 );
+		put32 ( memory, 0x22010, 0x23000 + 960 );
+		put32 ( memory, 0x22014, 0 );
+		put32 ( memory, 0x22018, 960 );
+		put32 ( memory, 0x2201C, 1 );
+
+		uint64_t stream = base + 0x80 + 4 * 0x20;
+
+		sound->write ( stream, 1, 1 );
+		sound->write ( stream, 1, 0 );
+		sound->write ( stream + 0x08, 4, 1920 );
+		sound->write ( stream + 0x0C, 2, 1 );
+		sound->write ( stream + 0x12, 2, 0x0011 );
+		sound->write ( stream + 0x18, 4, 0x22000 );
+		sound->write ( base + 0x70, 4, 0x24000 | 1 );
+		sound->write ( stream, 4, 1u << 20 | 0x06 );
+		sound->advance ( 1000 );
+		sound->advance ( 1000 + 5000000 );
+
+		bool played = catcher->frames == 240 && catcher->rate == 48000 && catcher->left > 0.499f && catcher->left < 0.501f && catcher->right < -0.499f && catcher->right > -0.501f;
+		bool moved = sound->read ( stream + 0x04, 4 ) == 960 && get32 ( memory, 0x24000 + 4 * 8 ) == 960 && ( sound->read ( stream + 0x03, 1 ) & 0x04 ) && bus->lines [ 17 ];
+
+		expect ( played && moved, "modern: an HD Audio output stream plays its BDL at 48 kHz, moves LPIB and the position buffer, and interrupts on IOC" );
+
+		delete sound;
+		delete catcher;
+		delete vm;
+		delete bus;
+
+	}
+
 	void modern_tests ( ) {
 
 		print ( "\r\n" );
 		aml_tests ( );
 		ide_tests ( );
+		usb_tests ( );
+		sound_tests ( );
+		uefi_tests ( );
 		smbios_tests ( );
 		video_tests ( );
 		boot_tests ( );

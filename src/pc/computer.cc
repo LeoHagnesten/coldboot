@@ -122,11 +122,26 @@ namespace pc {
 		if ( board )
 			board->stop ( );
 
+		if ( router )
+			router->stop ( );
+
+		delete router;
+		delete nic;
+		delete sound;
+		router = nullptr;
+		nic = nullptr;
+		sound = nullptr;
 		delete firmware;
+		delete uefi_firmware;
 		delete storage;
+		delete usb;
+		delete tablet;
 		delete video;
 		firmware = nullptr;
+		uefi_firmware = nullptr;
 		storage = nullptr;
+		usb = nullptr;
+		tablet = nullptr;
 		video = nullptr;
 
 		if ( board ) {
@@ -166,7 +181,11 @@ namespace pc {
 
 		video = new vga ( vm );
 		storage = new ide_controller ( *board, vm );
+		usb = new uhci ( *board, vm, 16 );
+		tablet = new usb_tablet ( );
 		firmware = new bios ( );
+		seen_polls = 0;
+		polled_at = 0;
 
 		if ( !video->vram )
 			return fail ( "Couldn't allocate video memory" );
@@ -178,9 +197,20 @@ namespace pc {
 		vm.attach_ports ( 0x170, 0x177, storage );
 		vm.attach_ports ( 0x376, 0x376, storage );
 		vm.attach_ports ( storage->master_base, static_cast < uint16_t > ( storage->master_base + 15 ), storage );
-		vm.attach_ports ( bios::port, bios::port + 7, firmware );
+		if ( !options.uefi )
+			vm.attach_ports ( bios::port, bios::port + 15, firmware );
+
+		vm.attach_ports ( usb->base, static_cast < uint16_t > ( usb->base + 31 ), usb );
 		board->pci.attach ( 1, 1, storage );
+		board->pci.attach ( 1, 2, usb );
 		board->pci.attach ( 2, 0, video );
+		usb->plug ( 0, tablet );
+		board->add_ticker ( usb );
+		sound = new hda ( *board, vm, 17 );
+		sound->connect ( speaker );
+		vm.attach_memory ( sound->memory_base, hda::memory_size, sound );
+		board->pci.attach ( 5, 0, sound );
+		board->add_ticker ( sound );
 		video->map ( );
 
 		if ( !disc.present ( ) && options.iso [ 0 ] )
@@ -222,7 +252,55 @@ namespace pc {
 		for ( const wchar_t* at = options.disk [ 0 ] ? options.disk : options.iso; *at; at++ )
 			links.seed = ( links.seed ^ static_cast < uint64_t > ( *at | 0x20 ) ) * 0x100000001B3ull;
 
+		if ( options.network ) {
+
+			uint8_t address [ 6 ] = { 0x02, 0xCB, static_cast < uint8_t > ( links.seed >> 24 ), static_cast < uint8_t > ( links.seed >> 32 ), static_cast < uint8_t > ( links.seed >> 40 ), static_cast < uint8_t > ( links.seed >> 48 | 1 ) };
+
+			nic = new e1000 ( *board, vm, 19, address );
+			router = new net::nat ( );
+			vm.attach_memory ( nic->memory_base, e1000::memory_size, nic );
+			vm.attach_ports ( nic->io_base, static_cast < uint16_t > ( nic->io_base + 63 ), nic );
+			board->pci.attach ( 3, 0, nic );
+			nic->connect ( router );
+
+			if ( !router->start ( nic ) ) {
+
+				delete router;
+				router = nullptr;
+				nic->connect ( nullptr );
+
+			}
+
+		}
+
 		char error [ 160 ] = { };
+
+		if ( options.uefi ) {
+
+			uefi_links efi_links;
+
+			efi_links.vm = &vm;
+			efi_links.bus = board;
+			efi_links.video = video;
+			efi_links.keyboard = &board->keyboard;
+			efi_links.pics = &board->pics;
+			efi_links.hard_disk = links.hard_disk;
+			efi_links.optical = disc.present ( ) ? &disc : nullptr;
+			efi_links.processors = shape.processors;
+			efi_links.optical_first = options.optical_first;
+			efi_links.seed = links.seed;
+			efi_links.variables = options.variables [ 0 ] ? options.variables : nullptr;
+			uefi_firmware = new uefi ( );
+
+			if ( !uefi_firmware->install ( efi_links, error, sizeof ( error ) ) )
+				return fail ( error );
+
+			if ( !board->start ( ) )
+				return fail ( board->vm.problem [ 0 ] ? board->vm.problem : "Couldn't start the processors" );
+
+			return true;
+
+		}
 
 		if ( !firmware->install ( links, error, sizeof ( error ) ) )
 			return fail ( error );
@@ -320,6 +398,36 @@ namespace pc {
 		board->vm.lock_devices ( );
 		board->keyboard.mouse ( dx, dy, wheel, buttons );
 		board->vm.unlock_devices ( );
+
+	}
+
+	void computer::pointer ( int32_t x, int32_t y, int32_t wheel, uint8_t buttons ) {
+
+		if ( !board || !tablet )
+			return;
+
+		board->vm.lock_devices ( );
+		tablet->move ( x, y, wheel, buttons );
+		board->vm.unlock_devices ( );
+
+	}
+
+	bool computer::pointer_ready ( ) {
+
+		if ( !board || !tablet )
+			return false;
+
+		long polls = tablet->polls;
+		uint64_t moment = host_nanoseconds ( );
+
+		if ( polls != seen_polls ) {
+
+			seen_polls = polls;
+			polled_at = moment;
+
+		}
+
+		return tablet->configuration && polled_at && moment - polled_at < 500000000ull;
 
 	}
 

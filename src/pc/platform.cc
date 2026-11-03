@@ -68,6 +68,7 @@ namespace pc {
 		delete router;
 		router = nullptr;
 		log_length = 0;
+		ticker_count = 0;
 		reset_requested = 0;
 		power_off_requested = 0;
 
@@ -196,7 +197,20 @@ namespace pc {
 		timer.advance ( );
 		clock.advance ( );
 		power.advance ( );
+
+		uint64_t moment = now ( );
+
+		for ( uint32_t i = 0; i < ticker_count; i++ )
+			tickers [ i ]->advance ( moment );
+
 		vm.unlock_devices ( );
+
+	}
+
+	void platform::add_ticker ( ticking* target ) {
+
+		if ( ticker_count < 8 )
+			tickers [ ticker_count++ ] = target;
 
 	}
 

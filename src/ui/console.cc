@@ -308,7 +308,7 @@ namespace ui {
 		if ( state.running && state.frame_width > 0 )
 			right.number ( state.frame_width ).add ( L" \x00D7 " ).number ( state.frame_height ).add ( L"  \x00B7  " );
 
-		right.add ( state.captured ? L"Right Ctrl releases the mouse and keyboard" : L"Click the screen to capture the mouse" );
+		right.add ( state.captured ? L"Right Ctrl releases the mouse and keyboard" : ( state.integrated ? L"Mouse integration on" : L"Click the screen to capture the mouse" ) );
 		gpu.text ( right.text ( ), render::FONT_SMALL, rect { width * 0.45f, bar.y, width * 0.55f - 14.0f, status }, state.captured ? colors.accent : colors.faint, render::ALIGN_RIGHT );
 
 	}

@@ -4,6 +4,7 @@
 #include "pc/computer.hh"
 #include "pc/iso.hh"
 #include "tests/harness.hh"
+#include "vm/config.hh"
 #include <windows.h>
 
 namespace tests {
@@ -38,6 +39,25 @@ namespace tests {
 				press ( machine, 0x1C, false );
 				i++;
 
+			} else if ( c == L'\\' && text [ i + 1 ] == L't' ) {
+
+				press ( machine, 0x0F, false );
+				i++;
+
+			} else if ( c == L'\\' && text [ i + 1 ] == L'a' && text [ i + 2 ] >= L'a' && text [ i + 2 ] <= L'z' ) {
+
+				machine.key ( 0x38, false );
+				Sleep ( 40 );
+				press ( machine, static_cast < uint8_t > ( letters [ text [ i + 2 ] - L'a' ] ), false );
+				machine.key ( 0xB8, false );
+				Sleep ( 40 );
+				i += 2;
+
+			} else if ( c == L'\\' && text [ i + 1 ] == L'w' ) {
+
+				Sleep ( 1000 );
+				i++;
+
 			} else if ( c == L'\\' && text [ i + 1 ] == L'e' ) {
 
 				press ( machine, 0x01, false );
@@ -57,6 +77,32 @@ namespace tests {
 				Sleep ( 40 );
 				machine.key ( 0xC8, true );
 				Sleep ( 40 );
+				i++;
+
+			} else if ( c == L'\\' && text [ i + 1 ] == L'b' ) {
+
+				press ( machine, 0x0E, false );
+				i++;
+
+			} else if ( c == L'\\' && text [ i + 1 ] == L'g' ) {
+
+				machine.key ( 0x5B, true );
+				Sleep ( 60 );
+				machine.key ( 0xDB, true );
+				Sleep ( 40 );
+				i++;
+
+			} else if ( c == L'\\' && text [ i + 1 ] == L'T' ) {
+
+				machine.key ( 0x2A, false );
+				press ( machine, 0x0F, false );
+				machine.key ( 0xAA, false );
+				Sleep ( 40 );
+				i++;
+
+			} else if ( c == L'\\' && text [ i + 1 ] == L's' ) {
+
+				press ( machine, 0x39, false );
 				i++;
 
 			} else if ( c >= L'a' && c <= L'z' )
@@ -239,9 +285,146 @@ namespace tests {
 
 	}
 
+	struct counting_speaker : pc::sound_sink {
+
+		uint32_t frames = 0;
+		float peak = 0.0f;
+
+		void play ( const float* samples, uint32_t count, uint32_t ) override {
+
+			frames += count;
+
+			for ( uint32_t i = 0; i < count * 2; i++ ) {
+
+				float level = samples [ i ] < 0.0f ? -samples [ i ] : samples [ i ];
+
+				if ( level > peak )
+					peak = level;
+
+			}
+
+		}
+
+	};
+
+	static bool starts ( const wchar_t* text, const wchar_t* prefix ) {
+
+		for ( ; *prefix; text++, prefix++ ) {
+
+			if ( *text != *prefix )
+				return false;
+
+		}
+
+		return true;
+
+	}
+
+	static int32_t read_number ( const wchar_t*& at ) {
+
+		int32_t value = 0;
+
+		while ( *at == L' ' )
+			at++;
+
+		while ( *at >= L'0' && *at <= L'9' )
+			value = value * 10 + ( *at++ - L'0' );
+
+		return value;
+
+	}
+
+	static bool run_control ( pc::computer& machine, const wchar_t* path, const wchar_t* folder, uint32_t* pixels ) {
+
+		HANDLE file = CreateFileW ( path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr );
+
+		if ( file == INVALID_HANDLE_VALUE )
+			return true;
+
+		static char bytes [ 8192 ];
+		static wchar_t text [ 8192 ];
+		DWORD got = 0;
+
+		ReadFile ( file, bytes, sizeof ( bytes ) - 1, &got, nullptr );
+		CloseHandle ( file );
+		DeleteFileW ( path );
+
+		int32_t length = MultiByteToWideChar ( CP_UTF8, 0, bytes, static_cast < int > ( got ), text, 8191 );
+
+		text [ length > 0 ? length : 0 ] = 0;
+
+		for ( wchar_t* line = text; *line; ) {
+
+			wchar_t* end = line;
+
+			while ( *end && *end != L'\n' && *end != L'\r' )
+				end++;
+
+			wchar_t saved = *end;
+
+			*end = 0;
+
+			if ( line [ 0 ] == 0xFEFF )
+				line++;
+
+			int32_t width = 0;
+			int32_t height = 0;
+
+			machine.screen ( pixels, width, height, now_seconds ( ) );
+
+			if ( starts ( line, L"keys " ) )
+				type_text ( machine, line + 5 );
+			else if ( starts ( line, L"shot " ) )
+				save_screen ( machine, folder, line + 5, pixels );
+			else if ( starts ( line, L"wait " ) ) {
+
+				const wchar_t* at = line + 5;
+
+				Sleep ( static_cast < DWORD > ( read_number ( at ) ) );
+
+			} else if ( starts ( line, L"click " ) || starts ( line, L"right " ) || starts ( line, L"move " ) || starts ( line, L"double " ) ) {
+
+				const wchar_t* at = line + ( line [ 0 ] == L'm' ? 5 : ( line [ 0 ] == L'd' ? 7 : 6 ) );
+				int32_t x = read_number ( at );
+				int32_t y = read_number ( at );
+				int32_t span = pc::usb_tablet::span;
+				int32_t tablet_x = width ? static_cast < int32_t > ( ( static_cast < int64_t > ( x ) * span + span / 2 ) / width ) : 0;
+				int32_t tablet_y = height ? static_cast < int32_t > ( ( static_cast < int64_t > ( y ) * span + span / 2 ) / height ) : 0;
+				uint8_t button = line [ 0 ] == L'r' ? 2 : 1;
+
+				machine.pointer ( tablet_x, tablet_y, 0, 0 );
+				Sleep ( 60 );
+
+				for ( int32_t times = line [ 0 ] == L'd' ? 2 : ( line [ 0 ] == L'm' ? 0 : 1 ); times > 0; times-- ) {
+
+					machine.pointer ( tablet_x, tablet_y, 0, button );
+					Sleep ( 60 );
+					machine.pointer ( tablet_x, tablet_y, 0, 0 );
+					Sleep ( 60 );
+
+				}
+
+			} else if ( starts ( line, L"power" ) )
+				machine.press_power ( );
+			else if ( starts ( line, L"quit" ) )
+				return false;
+
+			*end = saved;
+			line = end;
+
+			while ( *line == L'\n' || *line == L'\r' )
+				line++;
+
+		}
+
+		return true;
+
+	}
+
 	int32_t computer_main ( wchar_t** arguments, int32_t count ) {
 
 		const wchar_t* folder = nullptr;
+		const wchar_t* control = nullptr;
 		const wchar_t* typed = nullptr;
 		double type_at = 0.0;
 		const wchar_t* script_text [ 32 ] = { };
@@ -313,6 +496,28 @@ namespace tests {
 				every = number ( next ( ) );
 			else if ( base::same_text ( arguments [ i ], L"--disk-first" ) )
 				options->optical_first = false;
+			else if ( base::same_text ( arguments [ i ], L"--no-network" ) )
+				options->network = false;
+			else if ( base::same_text ( arguments [ i ], L"--uefi" ) )
+				options->uefi = true;
+			else if ( base::same_text ( arguments [ i ], L"--variables" ) ) {
+
+				const wchar_t* path = next ( );
+
+				for ( int32_t c = 0; c < MAX_PATH - 1 && path [ c ]; c++ )
+					options->variables [ c ] = path [ c ];
+
+			}
+			else if ( base::same_text ( arguments [ i ], L"--control" ) )
+				control = next ( );
+			else if ( base::same_text ( arguments [ i ], L"--create-disk" ) ) {
+
+				uint64_t gigabytes = static_cast < uint64_t > ( number ( next ( ) ) );
+
+				if ( options->disk [ 0 ] && GetFileAttributesW ( options->disk ) == INVALID_FILE_ATTRIBUTES )
+					vm::create_disk ( options->disk, gigabytes << 30 );
+
+			}
 			else if ( base::same_text ( arguments [ i ], L"--type" ) )
 				typed = next ( );
 			else if ( base::same_text ( arguments [ i ], L"--at" ) )
@@ -339,6 +544,10 @@ namespace tests {
 		CreateDirectoryW ( folder, nullptr );
 
 		pc::computer* machine = new pc::computer ( );
+		counting_speaker* speaker = new counting_speaker ( );
+
+		machine->speaker = speaker;
+
 		uint32_t* pixels = static_cast < uint32_t* > ( runtime_allocate ( sizeof ( uint32_t ) * pc::vga::max_width * pc::vga::max_height ) );
 		char line [ 512 ];
 
@@ -351,6 +560,7 @@ namespace tests {
 			print ( line );
 			runtime_release ( pixels );
 			delete machine;
+			delete speaker;
 			delete options;
 
 			return 1;
@@ -413,6 +623,9 @@ namespace tests {
 
 			}
 
+			if ( control && !run_control ( *machine, control, folder, pixels ) )
+				break;
+
 			if ( every > 0.0 && elapsed >= next_shot ) {
 
 				base::writer name;
@@ -432,7 +645,16 @@ namespace tests {
 		machine->console_text ( console, sizeof ( console ) );
 		line [ 0 ] = 0;
 		append ( line, sizeof ( line ), "boot: " );
-		append ( line, sizeof ( line ), machine->firmware ? machine->firmware->last_boot : "-" );
+		append ( line, sizeof ( line ), machine->uefi_firmware ? machine->uefi_firmware->last_boot : ( machine->firmware ? machine->firmware->last_boot : "-" ) );
+
+		if ( machine->uefi_firmware ) {
+
+			append ( line, sizeof ( line ), "\r\nuefi calls " );
+			append_number ( line, sizeof ( line ), machine->uefi_firmware->calls );
+			append ( line, sizeof ( line ), " " );
+			append ( line, sizeof ( line ), machine->uefi_firmware->trouble );
+
+		}
 		append ( line, sizeof ( line ), "\r\nvideo mode " );
 		append_hex ( line, sizeof ( line ), machine->video ? machine->video->legacy_mode : 0, 2 );
 		append ( line, sizeof ( line ), " vbe " );
@@ -464,11 +686,49 @@ namespace tests {
 
 		append ( line, sizeof ( line ), "\r\nconsole:\r\n" );
 		print ( line );
+
+		if ( machine->storage ) {
+
+			static char traced [ 8192 ];
+
+			traced [ 0 ] = 0;
+			append ( traced, sizeof ( traced ), machine->drive.present ( ) ? "disk open\r\nide:" : "disk missing\r\nide:" );
+
+			for ( uint32_t i = 0; i < machine->storage->trace_count; i++ ) {
+
+				append ( traced, sizeof ( traced ), " " );
+				append_hex ( traced, sizeof ( traced ), machine->storage->trace [ i ], 4 );
+
+			}
+
+			append ( traced, sizeof ( traced ), "\r\nnic sent " );
+			append_number ( traced, sizeof ( traced ), machine->nic ? machine->nic->frames_sent : -1 );
+			append ( traced, sizeof ( traced ), ", received " );
+			append_number ( traced, sizeof ( traced ), machine->nic ? machine->nic->frames_received : -1 );
+			append ( traced, sizeof ( traced ), ", tablet polls " );
+			append_number ( traced, sizeof ( traced ), machine->tablet ? machine->tablet->polls : -1 );
+			append ( traced, sizeof ( traced ), ", usb frames " );
+			append_number ( traced, sizeof ( traced ), machine->usb ? machine->usb->frames_run : -1 );
+			append ( traced, sizeof ( traced ), "\r\nsound verbs " );
+			append_number ( traced, sizeof ( traced ), machine->sound ? machine->sound->verbs_run : -1 );
+			append ( traced, sizeof ( traced ), ", frames " );
+			append_number ( traced, sizeof ( traced ), speaker->frames );
+			append ( traced, sizeof ( traced ), ", peak x1000 " );
+			append_number ( traced, sizeof ( traced ), static_cast < int64_t > ( speaker->peak * 1000.0f ) );
+			append ( traced, sizeof ( traced ), "\r\nnat in " );
+			append_number ( traced, sizeof ( traced ), machine->router ? machine->router->frames_in : -1 );
+			append ( traced, sizeof ( traced ), ", out " );
+			append_number ( traced, sizeof ( traced ), machine->router ? machine->router->frames_out : -1 );
+			append ( traced, sizeof ( traced ), "\r\n" );
+			print ( traced );
+
+		}
 		print ( console );
 		print ( "\r\n" );
 		machine->power_off ( );
 		runtime_release ( pixels );
 		delete machine;
+		delete speaker;
 		delete options;
 
 		return 0;

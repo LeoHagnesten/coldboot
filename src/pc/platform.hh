@@ -44,6 +44,8 @@ namespace pc {
 
 		void load ( uint64_t address, const uint8_t* data, uint32_t size );
 
+		void add_ticker ( ticking* target );
+
 		hv::machine vm;
 		dual_pic pics;
 		interval_timer timer;
@@ -67,6 +69,8 @@ namespace pc {
 
 		HANDLE timer_thread = nullptr;
 		volatile long timer_quit = 0;
+		ticking* tickers [ 8 ] = { };
+		uint32_t ticker_count = 0;
 		SRWLOCK console_lock = SRWLOCK_INIT;
 		char log [ 65536 ] = { };
 		int32_t log_length = 0;

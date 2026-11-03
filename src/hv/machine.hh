@@ -23,6 +23,14 @@ namespace hv {
 
 	};
 
+	struct call_target {
+
+		virtual ~call_target ( ) = default;
+
+		virtual void call ( uint32_t processor, uint32_t value, cpu_state& cpu ) = 0;
+
+	};
+
 	struct legacy_source {
 
 		virtual ~legacy_source ( ) = default;
@@ -66,6 +74,8 @@ namespace hv {
 
 		void relocate_ports ( device* target, uint16_t from, uint16_t first, uint16_t last );
 
+		void relocate_memory ( device* target, uint64_t from, uint64_t base );
+
 		bool get_state ( uint32_t processor, cpu_state& out ) const;
 
 		bool set_state ( uint32_t processor, const cpu_state& in );
@@ -95,6 +105,13 @@ namespace hv {
 		void set_legacy ( legacy_source* source ) {
 
 			legacy = source;
+
+		}
+
+		void attach_call ( uint16_t port, call_target* target ) {
+
+			call_port = port;
+			call_handler = target;
 
 		}
 
@@ -201,6 +218,8 @@ namespace hv {
 		uint64_t mtrrs [ max_processors ] [ 28 ] = { };
 		eoi_listener* eoi_target = nullptr;
 		legacy_source* legacy = nullptr;
+		call_target* call_handler = nullptr;
+		uint16_t call_port = 0;
 		volatile long legacy_wanted = 0;
 		uint32_t thread_count = 0;
 		volatile long quit = 0;

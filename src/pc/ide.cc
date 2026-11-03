@@ -260,6 +260,9 @@ namespace pc {
 
 			} else if ( was_reset ) {
 
+				if ( trace_count < 512 )
+					trace [ trace_count++ ] = static_cast < uint16_t > ( index << 12 | 0x0EFF );
+
 				soft_reset ( index );
 				lower ( index );
 
@@ -545,6 +548,9 @@ namespace pc {
 		ide_drive& drive = selected ( channel );
 		bool optical = drive.kind == DRIVE_OPTICAL;
 
+		if ( code != 0xA0 && code != 0xC8 && code != 0xCA && code != 0x25 && code != 0x35 && code != 0xE7 && code != 0xEA && trace_count < 512 )
+			trace [ trace_count++ ] = static_cast < uint16_t > ( index << 12 | channel.unit << 8 | code );
+
 		channel.command = code;
 		channel.error = 0;
 		channel.transfer = TRANSFER_NONE;
@@ -568,6 +574,14 @@ namespace pc {
 
 			if ( code == 0xEC )
 				signature ( index, channel.unit );
+
+			abort_command ( index );
+
+			return;
+
+		}
+
+		if ( !optical && ( code == 0xA0 || code == 0xA1 ) ) {
 
 			abort_command ( index );
 
@@ -756,10 +770,6 @@ namespace pc {
 
 			case 0xE7:
 			case 0xEA:
-
-				if ( drive.media )
-					drive.media->flush ( );
-
 				finish ( index, true );
 				return;
 

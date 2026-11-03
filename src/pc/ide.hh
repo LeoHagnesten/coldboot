@@ -107,6 +107,8 @@ namespace pc {
 
 		uint16_t master_base = default_master;
 		volatile long busy_light = 0;
+		uint16_t trace [ 512 ] = { };
+		uint32_t trace_count = 0;
 
 	private:
 
